@@ -1,0 +1,2 @@
+%sudo ALL=(root) NOPASSWD: /opt/samsung-galaxybook-extras/set-keyboard-brightness.sh
+%sudo ALL=(root) NOPASSWD: /opt/samsung-galaxybook-extras/set-webcam-binding.sh

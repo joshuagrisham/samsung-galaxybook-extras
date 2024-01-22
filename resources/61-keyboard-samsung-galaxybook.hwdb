@@ -1,0 +1,8 @@
+# Galaxy Book2 Pro NP950XED-KA2SE
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn950XED:*
+ KEYBOARD_KEY_ce=!prog1    # Settings (requires Galaxybook Extras)
+ KEYBOARD_KEY_ac=prog2     # Multi-level Keyboard Backlight toggle (requires Galaxybook Extras)
+ KEYBOARD_KEY_9f=prog3     # Camera toggle (requires Galaxybook Extras)
+ KEYBOARD_KEY_76=f21       # Touchpad toggle
+ KEYBOARD_KEY_a8=unknown   # Fn lock On is handled by BIOS so it can be ignored
+ KEYBOARD_KEY_a9=unknown   # Fn lock Off is handled by BIOS so it can be ignored
