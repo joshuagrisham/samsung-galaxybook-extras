@@ -1,5 +1,14 @@
-# Galaxy Book2 Pro NP950XED-KA2SE
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn950XED:*
+# Samsung Galaxy Book series notebooks
+##  xxxXED:  Galaxy Book2 series
+##  xxxQED:  Galaxy Book2 360 series
+##  xxxXFG:  Galaxy Book3 series
+##  xxxQFG:  Galaxy Book3 360 series
+##  xxxXFH:  Galaxy Book3 Ultra series
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]XED:*
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]QED:*
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]XFG:*
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]QFG:*
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]XFH:*
  KEYBOARD_KEY_ce=!prog1    # Settings (requires Galaxybook Extras)
  KEYBOARD_KEY_ac=prog2     # Multi-level Keyboard Backlight toggle (requires Galaxybook Extras)
  KEYBOARD_KEY_9f=prog3     # Camera toggle (requires Galaxybook Extras)
