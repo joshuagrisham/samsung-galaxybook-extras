@@ -129,7 +129,7 @@ static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 			ACPI_METHOD_SETTINGS, &arg, NULL);
 
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		pr_err("failed to execute kbd_backlight init with ACPI method %s, got %s\n",
+		pr_err("failed to init kbd_backlight with ACPI method %s, got %s\n",
 				ACPI_METHOD_SETTINGS,
 				acpi_format_exception(status));
 		return -ENXIO;
@@ -261,7 +261,7 @@ static ssize_t usb_charging_store(struct device *dev, struct device_attribute *a
 	// {0x43, 0x58, 0x68, 0x00, 0xaa, value, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		pr_err("failed to execute usb_charging set with ACPI method %s, got %s\n",
+		pr_err("failed to set usb_charging with ACPI method %s, got %s\n",
 				ACPI_METHOD_SETTINGS,
 				acpi_format_exception(status));
 		return -ENXIO;
@@ -302,7 +302,7 @@ static ssize_t usb_charging_show(struct device *dev, struct device_attribute *at
 			ACPI_METHOD_SETTINGS, &arg, &response_buffer);
 
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		pr_err("failed to execute usb_charging read with ACPI method %s, got %s\n",
+		pr_err("failed to get usb_charging with ACPI method %s, got %s\n",
 				ACPI_METHOD_SETTINGS,
 				acpi_format_exception(status));
 		ret = -ENXIO;
@@ -311,14 +311,14 @@ static ssize_t usb_charging_show(struct device *dev, struct device_attribute *at
 
 	response = response_buffer.pointer;
 	if (response->type != ACPI_TYPE_BUFFER) {
-		pr_err("failed to execute usb_charging read with ACPI method %s, response type was invalid.\n",
+		pr_err("failed to get usb_charging with ACPI method %s, response type was invalid.\n",
 				ACPI_METHOD_SETTINGS);
 		ret = -EIO;
 		goto out_free;
 	}
 
 	if (response->buffer.length < 6) {
-		pr_err("failed to execute usb_charging read with ACPI method %s, response from device was too short.\n",
+		pr_err("failed to get usb_charging with ACPI method %s, response from device was too short.\n",
 				ACPI_METHOD_SETTINGS);
 		ret = -EIO;
 		goto out_free;
@@ -326,7 +326,7 @@ static ssize_t usb_charging_show(struct device *dev, struct device_attribute *at
 
 	response_value = response->buffer.pointer[5];
 	if (response_value == 0xff) {
-		pr_err("failed to execute usb_charging read with ACPI method %s, failure code 0xff was reported from the device.\n",
+		pr_err("failed to get usb_charging with ACPI method %s, failure code 0xff was reported from the device.\n",
 				ACPI_METHOD_SETTINGS);
 		ret = -EIO;
 		goto out_free;
@@ -340,7 +340,7 @@ static ssize_t usb_charging_show(struct device *dev, struct device_attribute *at
 		goto out_free;
 	}
 	else {
-		pr_err("failed to execute usb_charging read with ACPI method %s, unexpected value %02x was reported from the device.\n",
+		pr_err("failed to get usb_charging with ACPI method %s, unexpected value %02x was reported from the device.\n",
 				ACPI_METHOD_SETTINGS,
 				response_value);
 		ret = -ERANGE;
@@ -356,13 +356,20 @@ static DEVICE_ATTR_RW(usb_charging);
 
 
 /* Performance mode */
-/*
+
 typedef enum {
 	PERFORMANCE_MODE_SILENT,
 	PERFORMANCE_MODE_QUIET,
 	PERFORMANCE_MODE_OPTIMIZED,
 	PERFORMANCE_MODE_HIGH_PERFORMANCE,
 } galaxybook_performance_mode;
+
+static u8 galaxybook_performance_mode_values[] = {
+	0x0b, // PERFORMANCE_MODE_SILENT
+	0x0a, // PERFORMANCE_MODE_QUIET
+	0x02, // PERFORMANCE_MODE_OPTIMIZED
+	0x15, // PERFORMANCE_MODE_HIGH_PERFORMANCE
+};
 
 const static struct {
     galaxybook_performance_mode val;
@@ -386,31 +393,87 @@ galaxybook_performance_mode performance_mode_from_str (const char *str)
 	return -1;
 }
 
-static galaxybook_performance_mode performance_mode;
+static galaxybook_performance_mode latest_performance_mode; // TODO: remove this when figuring out right logic for _show
 
 static ssize_t performance_mode_store(struct device *dev, struct device_attribute *attr,
 									  const char *buffer, size_t count)
 {
-	int input = performance_mode_from_str(buffer);
-	if (input < 0)
-		if (kstrtoint(buffer, 0, &input) < 0)
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
+	union acpi_object args;
+	struct acpi_object_list arg;
+	acpi_status status;
+
+	int performance_mode = performance_mode_from_str(buffer);
+	if (performance_mode < 0)
+		if (kstrtoint(buffer, 0, &performance_mode) < 0)
 			return -EINVAL;
 
-	if (input < 0 || input > PERFORMANCE_MODE_HIGH_PERFORMANCE)
+	if (performance_mode < 0 || performance_mode > PERFORMANCE_MODE_HIGH_PERFORMANCE)
 		return -ERANGE;
-	
-	performance_mode = input;
+
+	u8 set_payload[256] = { 0 };
+
+	set_payload[0] = 0x43;
+	set_payload[1] = 0x58;
+	set_payload[2] = 0x91;
+
+	set_payload[5] = 0x8d;
+	set_payload[6] = 0x02;
+	set_payload[7] = 0x46;
+	set_payload[8] = 0x82;
+	set_payload[9] = 0xca;
+	set_payload[10] = 0x8b;
+	set_payload[11] = 0x55;
+	set_payload[12] = 0x4a;
+	set_payload[13] = 0xba;
+	set_payload[14] = 0x0f;
+	set_payload[15] = 0x6f;
+	set_payload[16] = 0x1e;
+	set_payload[17] = 0x6b;
+	set_payload[18] = 0x92;
+	set_payload[19] = 0x1b;
+	set_payload[20] = 0x8f;
+	set_payload[21] = 0x51;
+	set_payload[22] = 0x03;
+
+	set_payload[23] = galaxybook_performance_mode_values[performance_mode];
+
+	args.type 			= ACPI_TYPE_BUFFER;
+	args.buffer.length 	= sizeof(set_payload);
+	args.buffer.pointer	= set_payload;
+
+	arg.count = 1;
+	arg.pointer = &args;
+
+	status = acpi_evaluate_object(galaxybook->acpi->handle,
+			ACPI_METHOD_PERFORMANCE_MODE, &arg, NULL);
+
+	// "set" should always reply with:
+	// {0x43, 0x58, 0x91, 0x00, 0xaa, 0x8d, 0x02, 0x46, 0x82, 0xca, 0x8b, 0x55, 0x4a, 0xba, 0x0f, 0x6f, 0x1e, 0x6b, 0x92, 0x1b, 0x8f, 0x51, 0x03, 0x00, ... }
+
+	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+		pr_err("failed to set performance_mode with ACPI method %s, got %s\n",
+				ACPI_METHOD_PERFORMANCE_MODE,
+				acpi_format_exception(status));
+		return -ENXIO;
+	}
+
+	pr_info("set performance_mode to %d\n", performance_mode);
+	latest_performance_mode = performance_mode;
 	return count;
 }
 
 static ssize_t performance_mode_show(struct device *dev, struct device_attribute *attr,
 									 char *buffer)
 {
-	return sysfs_emit(buffer, "%u\n", performance_mode);
+	pr_warn("TODO: performance_mode was not read from the device, but instead "
+		"only displays the latest value which has been set from the driver. "
+		"It is suspected that persisting and restoring this value across "
+		"restarts will need to be implemented in the userspace.");
+	return sysfs_emit(buffer, "%u\n", latest_performance_mode);
 }
 
 static DEVICE_ATTR_RW(performance_mode);
-*/
 
 /* Add attributes to necessary groups etc */
 
@@ -419,7 +482,7 @@ static struct attribute *galaxybook_attrs[] = {
 //	&dev_attr_dolby_atmos.attr,
 //	&dev_attr_start_on_lid_open.attr,
 	&dev_attr_usb_charging.attr,
-//	&dev_attr_performance_mode.attr,
+	&dev_attr_performance_mode.attr,
 	NULL
 };
 
