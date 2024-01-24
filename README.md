@@ -17,6 +17,7 @@ This is a new and (currently) completely out-of-tree kernel platform driver inte
 The following features are currently implemented:
 
 - Keyboard backlight
+- USB ports provide charging when device is turned off
 
 I have found the following features in my other traces and suspect it might be possible to implement endpoints to control these as well (requires additional debugging and development):
 
@@ -24,7 +25,6 @@ I have found the following features in my other traces and suspect it might be p
 - Performance modes (High performance, Optimized, Quiet, Silent)
 - Battery saver (stop charging at 85%)
 - Start device automatically when opening lid
-- USB ports provide charging when device is turned off
 
 ### Keyboard backlight
 
@@ -37,6 +37,21 @@ It also seems to be picked up automatically in GNOME 45.x in the panel, where yo
 I have also included a simple `toggle-keyboard-brightness` script along with the "extras" package as well as remapped the keyboard key Fn+F9 so that it will execute this script (assuming you are using GNOME).
 
 Note that the setting "automatically turn off the keyboard backlight after X seconds" in Windows is actually controlled by Samsung's application service and not by the device driver itself; if such a feature is desired then it would need to be a similar software-based solution (e.g. added to the "extras" or something).
+
+### USB Charging mode
+
+To turn off or on the "USB Charging" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/usb_charging` which can be read to or written from. A value of 0 means "off" and a value of 1 means "on".
+
+```sh
+# read current value (0 for disabled, 1 for enabled)
+cat /sys/bus/platform/devices/samsung-galaxybook/usb_charging
+
+# turn on (supports values such as: 1, on, true, yes, etc)
+echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/usb_charging
+
+# turn off (supports values such as: 0, off, false, no, etc)
+echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/usb_charging
+```
 
 ## Galaxybook Extras
 

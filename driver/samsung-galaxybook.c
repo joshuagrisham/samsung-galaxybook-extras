@@ -15,8 +15,6 @@
 #include <linux/init.h>
 #include <linux/acpi.h>
 #include <linux/dmi.h>
-#include <linux/input.h>
-#include <linux/input/sparse-keymap.h>
 #include <linux/leds.h>
 #include <linux/platform_device.h>
 
@@ -46,7 +44,7 @@ static const struct dmi_system_id galaxybook_dmi_ids[] = {
 };
 
 struct samsung_galaxybook {
-	struct acpi_device *device;
+	struct acpi_device *acpi;
 	struct platform_device *platform;
 	struct led_classdev kbd_backlight;
 };
@@ -66,10 +64,9 @@ static int galaxybook_kbd_backlight_set(struct led_classdev *led,
 	struct samsung_galaxybook *galaxybook = container_of(led,
 			struct samsung_galaxybook, kbd_backlight);
 
-	acpi_status status;
 	union acpi_object args;
 	struct acpi_object_list arg;
-	//struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	acpi_status status;
 
 	u8 set_payload[21] = { 0 };
 
@@ -87,8 +84,8 @@ static int galaxybook_kbd_backlight_set(struct led_classdev *led,
 	arg.count = 1;
 	arg.pointer = &args;
 
-	status = acpi_evaluate_object(galaxybook->device->handle,
-			ACPI_METHOD_SETTINGS, &arg, NULL); //&buffer);
+	status = acpi_evaluate_object(galaxybook->acpi->handle,
+			ACPI_METHOD_SETTINGS, &arg, NULL);
 
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
 		pr_err("failed to set kbd_backlight brightness with ACPI method %s, got %s\n",
@@ -99,7 +96,6 @@ static int galaxybook_kbd_backlight_set(struct led_classdev *led,
 
 	// "set" should reply with:
 	// {0x43, 0x58, 0x78, 0x00, 0xaa, 0x00, 0x80 * brightness, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	// kfree(buffer.pointer);
 
 	pr_info("setting kbd_backlight brightness to %d\n", brightness);
 	galaxybook->kbd_backlight.brightness = brightness;
@@ -109,10 +105,9 @@ static int galaxybook_kbd_backlight_set(struct led_classdev *led,
 
 static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 {
-	acpi_status status;
 	union acpi_object args;
 	struct acpi_object_list arg;
-	//struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	acpi_status status;
 
 	u8 init_payload[21] = { 0 };
 
@@ -130,8 +125,8 @@ static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 	arg.count = 1;
 	arg.pointer = &args;
 
-	status = acpi_evaluate_object(galaxybook->device->handle,
-			ACPI_METHOD_SETTINGS, &arg, NULL); //&buffer);
+	status = acpi_evaluate_object(galaxybook->acpi->handle,
+			ACPI_METHOD_SETTINGS, &arg, NULL);
 
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
 		pr_err("failed to execute kbd_backlight init with ACPI method %s, got %s\n",
@@ -142,13 +137,11 @@ static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 
 	// "init" should reply with:
 	// {0x43, 0x58, 0x78, 0x00, 0xaa, 0xdd, 0xcc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	// kfree(buffer.pointer);
 
 	pr_info("kbd_backlight initialized via ACPI method %s, registering led class...\n",
 			ACPI_METHOD_SETTINGS);
 
 	galaxybook->kbd_backlight = (struct led_classdev) {
-		/* .default_trigger = "rfkill0", TODO ?? */
 		.brightness_get = galaxybook_kbd_backlight_get,
 		.brightness_set_blocking = galaxybook_kbd_backlight_set,
 		.name = SAMSUNG_GALAXYBOOK_CLASS "::kbd_backlight",
@@ -164,6 +157,283 @@ static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
 }
 
 /*
+ * Platform Attributes (configuration properties which can be controlled via userspace)
+ */
+
+
+/* Battery saver mode (should battery stop charging at 85%) */
+/*
+static bool battery_saver;
+
+static ssize_t battery_saver_store(struct device *dev, struct device_attribute *attr,
+								   const char *buffer, size_t count)
+{
+	if (kstrtobool(buffer, &battery_saver) < 0)
+		return -EINVAL;
+	return count;
+}
+
+static ssize_t battery_saver_show(struct device *dev, struct device_attribute *attr,
+								  char *buffer)
+{
+	return sysfs_emit(buffer, "%u\n", battery_saver);
+}
+
+static DEVICE_ATTR_RW(battery_saver);
+*/
+
+/* Dolby Atmos mode for speakers */
+/*
+static bool dolby_atmos;
+
+static ssize_t dolby_atmos_store(struct device *dev, struct device_attribute *attr,
+								 const char *buffer, size_t count)
+{
+	if (kstrtobool(buffer, &dolby_atmos) < 0)
+		return -EINVAL;
+	return count;
+}
+
+static ssize_t dolby_atmos_show(struct device *dev, struct device_attribute *attr,
+								char *buffer)
+{
+	return sysfs_emit(buffer, "%u\n", dolby_atmos);
+}
+
+static DEVICE_ATTR_RW(dolby_atmos);
+*/
+
+/* Start on lid open (device should power on when lid is opened) */
+/*
+static bool start_on_lid_open;
+
+static ssize_t start_on_lid_open_store(struct device *dev, struct device_attribute *attr,
+									   const char *buffer, size_t count)
+{
+	if (kstrtobool(buffer, &start_on_lid_open) < 0)
+		return -EINVAL;
+	return count;
+}
+
+static ssize_t start_on_lid_open_show(struct device *dev, struct device_attribute *attr,
+									  char *buffer)
+{
+	return sysfs_emit(buffer, "%u\n", start_on_lid_open);
+}
+
+static DEVICE_ATTR_RW(start_on_lid_open);
+*/
+
+/* USB Charging (USB ports can charge other devices even when device is powered off) */
+
+static ssize_t usb_charging_store(struct device *dev, struct device_attribute *attr,
+								  const char *buffer, size_t count)
+{
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
+	bool value;
+	union acpi_object args;
+	struct acpi_object_list arg;
+	acpi_status status;
+
+	if (kstrtobool(buffer, &value) < 0)
+		return -EINVAL;
+
+	u8 set_payload[21] = { 0 };
+
+	set_payload[0] = 0x43;
+	set_payload[1] = 0x58;
+	set_payload[2] = 0x68;
+
+	// payload value should be 0x81 to turn on and 0x80 to turn off
+	set_payload[5] = value ? 0x81 : 0x80;
+
+	args.type 			= ACPI_TYPE_BUFFER;
+	args.buffer.length 	= sizeof(set_payload);
+	args.buffer.pointer	= set_payload;
+
+	arg.count = 1;
+	arg.pointer = &args;
+
+	status = acpi_evaluate_object(galaxybook->acpi->handle,
+			ACPI_METHOD_SETTINGS, &arg, NULL);
+
+	// "set" should reply with:
+	// {0x43, 0x58, 0x68, 0x00, 0xaa, value, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+
+	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+		pr_err("failed to execute usb_charging set with ACPI method %s, got %s\n",
+				ACPI_METHOD_SETTINGS,
+				acpi_format_exception(status));
+		return -ENXIO;
+	}
+
+	pr_info("turned usb_charging %s.\n", value ? "on (1)" : "off (0)");
+	return count;
+}
+
+static ssize_t usb_charging_show(struct device *dev, struct device_attribute *attr,
+								 char *buffer)
+{
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
+	union acpi_object args;
+	struct acpi_object_list arg;
+	acpi_status status;
+	struct acpi_buffer response_buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *response;
+	u8 response_value;
+	int ret = -1;
+
+	u8 read_payload[21] = { 0 };
+
+	read_payload[0] = 0x43;
+	read_payload[1] = 0x58;
+	read_payload[2] = 0x67;
+
+	read_payload[5] = 0x80;
+
+	args.type 			= ACPI_TYPE_BUFFER;
+	args.buffer.length 	= sizeof(read_payload);
+	args.buffer.pointer	= read_payload;
+
+	arg.count = 1;
+	arg.pointer = &args;
+
+	status = acpi_evaluate_object(galaxybook->acpi->handle,
+			ACPI_METHOD_SETTINGS, &arg, &response_buffer);
+
+	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+		pr_err("failed to execute usb_charging read with ACPI method %s, got %s\n",
+				ACPI_METHOD_SETTINGS,
+				acpi_format_exception(status));
+		ret = -ENXIO;
+		goto out_free;
+	}
+
+	response = response_buffer.pointer;
+	if (response->type != ACPI_TYPE_BUFFER) {
+		pr_err("failed to execute usb_charging read with ACPI method %s, response type was invalid.\n",
+				ACPI_METHOD_SETTINGS);
+		ret = -EIO;
+		goto out_free;
+	}
+
+	if (response->buffer.length < 6) {
+		pr_err("failed to execute usb_charging read with ACPI method %s, response from device was too short.\n",
+				ACPI_METHOD_SETTINGS);
+		ret = -EIO;
+		goto out_free;
+	}
+
+	response_value = response->buffer.pointer[5];
+	if (response_value == 0xff) {
+		pr_err("failed to execute usb_charging read with ACPI method %s, failure code 0xff was reported from the device.\n",
+				ACPI_METHOD_SETTINGS);
+		ret = -EIO;
+		goto out_free;
+	}
+	else if (response_value == 0x00) {
+		ret = sysfs_emit(buffer, "%u\n", 0);
+		goto out_free;
+	}
+	else if (response_value == 0x01) {
+		ret = sysfs_emit(buffer, "%u\n", 1);
+		goto out_free;
+	}
+	else {
+		pr_err("failed to execute usb_charging read with ACPI method %s, unexpected value %02x was reported from the device.\n",
+				ACPI_METHOD_SETTINGS,
+				response_value);
+		ret = -ERANGE;
+		goto out_free;
+	}
+
+out_free:
+	ACPI_FREE(response_buffer.pointer);
+	return ret;
+}
+
+static DEVICE_ATTR_RW(usb_charging);
+
+
+/* Performance mode */
+/*
+typedef enum {
+	PERFORMANCE_MODE_SILENT,
+	PERFORMANCE_MODE_QUIET,
+	PERFORMANCE_MODE_OPTIMIZED,
+	PERFORMANCE_MODE_HIGH_PERFORMANCE,
+} galaxybook_performance_mode;
+
+const static struct {
+    galaxybook_performance_mode val;
+    const char *str;
+} performance_mode_conversion[] = {
+    {PERFORMANCE_MODE_SILENT, "silent"},
+    {PERFORMANCE_MODE_QUIET, "quiet"},
+    {PERFORMANCE_MODE_OPTIMIZED, "optimized"},
+    {PERFORMANCE_MODE_HIGH_PERFORMANCE, "high"},
+    {PERFORMANCE_MODE_HIGH_PERFORMANCE, "high performance"},
+    {PERFORMANCE_MODE_HIGH_PERFORMANCE, "highperformance"},
+};
+
+galaxybook_performance_mode performance_mode_from_str (const char *str)
+{
+	// if input string has trailing newline then it should be ignored
+	int compare_size = (str[strlen(str) - 1] == '\n') ? strlen(str) - 1 : strlen(str);
+	for (int i = 0; i < sizeof (performance_mode_conversion) / sizeof (performance_mode_conversion[0]); i++)
+		if (!strncasecmp (str, performance_mode_conversion[i].str, compare_size))
+			return performance_mode_conversion[i].val;
+	return -1;
+}
+
+static galaxybook_performance_mode performance_mode;
+
+static ssize_t performance_mode_store(struct device *dev, struct device_attribute *attr,
+									  const char *buffer, size_t count)
+{
+	int input = performance_mode_from_str(buffer);
+	if (input < 0)
+		if (kstrtoint(buffer, 0, &input) < 0)
+			return -EINVAL;
+
+	if (input < 0 || input > PERFORMANCE_MODE_HIGH_PERFORMANCE)
+		return -ERANGE;
+	
+	performance_mode = input;
+	return count;
+}
+
+static ssize_t performance_mode_show(struct device *dev, struct device_attribute *attr,
+									 char *buffer)
+{
+	return sysfs_emit(buffer, "%u\n", performance_mode);
+}
+
+static DEVICE_ATTR_RW(performance_mode);
+*/
+
+/* Add attributes to necessary groups etc */
+
+static struct attribute *galaxybook_attrs[] = {
+//	&dev_attr_battery_saver.attr,
+//	&dev_attr_dolby_atmos.attr,
+//	&dev_attr_start_on_lid_open.attr,
+	&dev_attr_usb_charging.attr,
+//	&dev_attr_performance_mode.attr,
+	NULL
+};
+
+static const struct attribute_group galaxybook_attr_group = {
+	.attrs = galaxybook_attrs,
+};
+
+static const struct attribute_group *galaxybook_attr_groups[] = {
+	&galaxybook_attr_group,
+	NULL
+};
+
+
+/*
  * Platform
  */
 
@@ -171,6 +441,7 @@ static struct platform_driver galaxybook_platform_driver = {
 	.driver = {
 		.name = SAMSUNG_GALAXYBOOK_CLASS,
 		.acpi_match_table = galaxybook_device_ids,
+		.dev_groups = galaxybook_attr_groups,
 	},
 };
 
@@ -233,7 +504,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	strcpy(acpi_device_name(device), "Galaxybook Extras Controller");
 	strcpy(acpi_device_class(device), SAMSUNG_GALAXYBOOK_CLASS);
 	device->driver_data = galaxybook;
-	galaxybook->device = device;
+	galaxybook->acpi = device;
 
 	err = galaxybook_acpi_init(galaxybook); /* TODO needed? */
 	if (err)
@@ -265,7 +536,6 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 	galaxybook_kbd_backlight_exit(galaxybook);
 	galaxybook_platform_exit(galaxybook);
 	galaxybook_acpi_exit(galaxybook);
-	/* TODO: later will do things like in fujitsu-laptop, remove sysfs etc ? */
 
 	kfree(galaxybook);
 }
@@ -274,7 +544,7 @@ static struct acpi_driver galaxybook_acpi_driver = {
 	.name = SAMSUNG_GALAXYBOOK_NAME,
 	.class = SAMSUNG_GALAXYBOOK_CLASS,
 	.ids = galaxybook_device_ids,
-//	.flags	= ACPI_DRIVER_ALL_NOTIFY_EVENTS,
+	.flags = ACPI_DRIVER_ALL_NOTIFY_EVENTS, // TODO: See if this helps to catch other keypresses, otherwise remove
 	.ops = {
 		.add = galaxybook_acpi_add,
 		.remove = galaxybook_acpi_remove,
