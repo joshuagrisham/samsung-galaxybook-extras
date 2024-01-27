@@ -1,30 +1,38 @@
-# Samsung Galaxybook Extras
+# Samsung Galaxybook Extras ⚠️(WIP)⚠️
 
 Samsung Galaxybook Linux platform driver and accompanying utilities.
+
+Current status: ⚠️ **WIP and dare I say definitely not yet even alpha!** ⚠️ (use at your own risk!)
 
 The intent is to somewhat replicate in Linux what Samsung has done in Windows with what I think the following components are doing:
 
 - **Samsung System Event Controller**: an ACPI driver that interacts with their `SCAI` ACPI device in order to control a lot of these settings.
-- **Samsung System Platform Engine**: a service which runs in the background to handle a few things including (I think) things like automatically turning off the keyboard backlight after a configured idle timer, etc.
+- **Samsung System Support Engine**: a service which in turn starts the background program `SamsungSystemSupportEngine.exe` which seems to handle quite a lot of things on the userspace/application side, including:
+  - setting some last-known values at start time (Performance mode, possibly others?),
+  - automatically turning off and on the keyboard backlight based on a configured idle time,
+  - displaying OSD notifications upon hotkey presses,
+  - etc
 - **Samsung Settings**: GUI application to configure all of the different available features.
 
 ## Platform Driver
 
-This is a new and (currently) completely out-of-tree kernel platform driver intended to mimic what the **Samsung System Event Controller** seems to be doing in Windows (namely, communicate with the `SCAI` ACPI device in order to control these extra features). Once more features have been added and it has been tested then my intention was to try and submit the driver to be added to the kernel.
+This is a new and (currently) completely out-of-tree kernel platform driver intended to mimic what the **Samsung System Event Controller** Windows system device driver seems to be doing (namely, communicate with the `SCAI` ACPI device in order to control these extra features). Once more features have been added and it has been tested then my intention was to try and submit the driver to be added to the kernel.
 
 `cd` over to the [driver/](./driver/) folder and follow the README there for compiling and installing the module.
 
 The following features are currently implemented:
 
 - Keyboard backlight
+- Battery saver (stop charging at 85%)
+- Start device automatically when opening lid
 - USB ports provide charging when device is turned off
 - Performance mode (High performance, Optimized, Quiet, Silent) *note: setting is supported and seems to be working, but I have not found a way to read the current value from the device; see below*
 
-I have found the following features in my other traces and suspect it might be possible to implement endpoints to control these as well (requires additional debugging and development):
+The following features might be possible to implement but require  additional debugging and development:
 
 - "Dolby Atmos" mode for the speakers
-- Battery saver (stop charging at 85%)
-- Start device automatically when opening lid
+- Fan speed monitoring (`_FST` method is present on the device in ACPI but not sure why it is coming through yet?)
+- Capture input of the Performance mode hotkey (Fn+F11) (it does not come via the main keyboard device nor does it seem to notify the `SCAI` ACPI device)
 
 ### Keyboard backlight
 
@@ -37,6 +45,40 @@ It also seems to be picked up automatically in GNOME 45.x in the panel, where yo
 I have also included a simple `toggle-keyboard-brightness` script along with the "extras" package as well as remapped the keyboard key Fn+F9 so that it will execute this script (assuming you are using GNOME).
 
 Note that the setting "automatically turn off the keyboard backlight after X seconds" in Windows is actually controlled by Samsung's application service and not by the device driver itself; if such a feature is desired then it would need to be a similar software-based solution (e.g. added to the "extras" or something).
+
+### Battery saver
+
+To turn on or off the "Battery saver" mode (battery will stop charging at 85%), there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/battery_saver` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+
+```sh
+# read current value (0 for disabled, 1 for enabled)
+cat /sys/bus/platform/devices/samsung-galaxybook/battery_saver
+
+# turn on (supports values such as: 1, on, true, yes, etc)
+echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/battery_saver
+
+# turn off (supports values such as: 0, off, false, no, etc)
+echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/battery_saver
+```
+
+> **Note:** I have noticed that if you are currently plugged in with the setting turned on and already sitting at 85%, then disable this setting (with the idea that you wish to charge to 100%), charging does not seem to start automatically. It may be necessary to disconnect and reconnect the charging cable in this case. The Windows driver seems to be doing some hocus pocus with the ACPI battery device that I have not quite sorted out yet; I am assuming this is how they made it work more seamlessly in Windows?
+
+There is also an input event sent to the standard keyboard which is generated when battery saver is enabled and charging reaches 85%; I have also mapped this in so that notifications can be displayed (see below in the keyboard remapping section).
+
+### Start on lid open
+
+To turn on or off the "Start on lid open" setting (the laptop will  power on automatically when opening the lid), there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+
+```sh
+# read current value (0 for disabled, 1 for enabled)
+cat /sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open
+
+# turn on (supports values such as: 1, on, true, yes, etc)
+echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open
+
+# turn off (supports values such as: 0, off, false, no, etc)
+echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open
+```
 
 ### USB Charging mode
 
@@ -52,6 +94,12 @@ echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/usb_charging
 # turn off (supports values such as: 0, off, false, no, etc)
 echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/usb_charging
 ```
+
+My own observations on how this feature appears to work (which has nothing to do with this driver itself, actually):
+
+- Only the USB-C ports are impacted by this setting, and not the USB-A ports (at least this is the case on the Galaxy Book2 Pro).
+- When the setting is turned on and you plug in a mobile phone or similar to one of the USB-C ports, then the phone will begin charging from the laptop's battery.
+- When the setting is turned off and you plug in a mobile phone, the laptop battery will actually start charging from the phone's battery.
 
 ### Performance mode
 
@@ -84,17 +132,21 @@ echo 3 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
 echo High Performance | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
 ```
 
+**Note:** To match the logic in the Windows driver, as well as avoid causing issues with other features, the driver currently will always set the performance mode to "Optimized" every time during its initialization (e.g. upon startup). Ideally, there would be a way to "store" and read the startup value somehow (see below for more information on limitations surrounding this).
+
+It should be possible to set your own desired startup performance mode using `sysfsutils`, some kind of startup script, etc.
+
 #### Limitations reading performance_mode
 
 Unfortunately, I have still not been able to find any way to read the value of the "current" performance mode from the system.
 
-At the same time, I have a suspicion that this might actually be controlled in Windows somehow at the software level. I did a small test where I set the value to "High performance" in Windows, booted to Linux, set the value to "Quiet" using this driver,  noted a difference in the fan volume, then booted back into Windows where it was once again sitting at "High performance". My assumption is that the Samsung software (e.g. the Samsung System Platform Engine service among others) is storing what latest "value" was chosen by the user in Windows, and then upon startup, is setting this value using their driver.
+At the same time, I have a suspicion that this might actually be controlled in Windows somehow at the software level. I did a small test where I set the value to "High performance" in Windows, booted to Linux, set the value to "Quiet" using this driver,  noted a difference in the fan volume, then booted back into Windows where it was once again sitting at "High performance". My working assumption is that the Samsung software (namely, `SamsungSystemSupportEngine.exe`) is storing what latest "value" was chosen by the user in Windows, and then upon startup, is setting this value using their driver.
 
 I suppose that we could do similar on the Linux side (and might need to, actually), either via something like `sysfsutils` or with whatever eventually comes in the "Samsung Galaxybook Extras".
 
-In light of this, for now I have allowed reading of `/sys/bus/platform/devices/samsung-galaxybook/performance_mode` (via `cat`, for example), but please remember that it will only give the correct value if a value has first been set by the driver since the last time the driver has been loaded (a restart, for example). The "latest" set value is just stored in a local variable in the driver code itself, and every time the module is loaded, it will start with displaying a default value of 0 no matter what the real "perfomance mode" is at that time. I have considered changing the attribute to read-only, but for now if you do read the value, then there will be a warning printed in the kernel log which attempts to highlight this problem/limitation. Here is an example of the warning:
+In light of this, for now I have allowed reading of `/sys/bus/platform/devices/samsung-galaxybook/performance_mode` (via `cat`, for example), but please remember that it will only give the correct value if a value has first been set by the driver since the last time the driver has been loaded (a restart, for example). The "latest" set value is just stored in a local variable in the driver code itself.
 
-> [ 3020.445850] samsung_galaxybook: TODO: performance_mode was not read from the device, but instead only displays the latest value which has been set from the driver. It is suspected that persisting and restoring this value across restarts will need to be implemented in the userspace.
+If the value has not been set by the driver, reading the attribute value will be answered with a text response of `unknown`. Otherwise, it will answer with the last value set from the driver (either the startup default or something you have set it to).
 
 #### Does this performance_mode actually work?
 
@@ -118,8 +170,9 @@ Currently I have just created a few simple shell scripts which provide the follo
 
 - Toggle keyboard brightness level
 - Toggle camera on/off
-- Correct some of the keyboard mappings
-- Add GNOME Custom Keyboard Shortcuts to 
+- Add hwdb mapping for some unrecognized keyboard events
+- Display notifications on the screen when certain keys are pressed or events occur
+- Add GNOME Custom Keyboard Shortcuts to link these key mappings to the various scripts
 
 Once you have built, installed, and loaded the platform driver then you can also make use of these "extras". The various scripts and configuration files can be installed using the [install-extras.sh](./install-extras.sh) script.
 
@@ -131,10 +184,12 @@ For notifications based on hotkey presses, I have just relied on `notify-send` w
 
 The provided file [61-keyboard-samsung-galaxybook.hwdb](./resources/61-keyboard-samsung-galaxybook.hwdb) will correct some keyboard mappings as follows:
 
-- The "Settings" key (Fn+F1) is mapped to `prog1` so it can later be mapped as a custom keyboard shortcut
+- The "Settings" key (Fn+F1) is mapped to `config` which seem to automatically launch `gnome-control-center` and I assume might work for other desktop environments? Otherwise a shortcut can be created in your own environment to this key
 - The "Touchpad toggle" key (Fn+F5) is mapped to `F21` as this is typically recognized in Linux as the touchpad toggle key (tested as working in GNOME 45.x)
-- The "Keyboard backlight" key (Fn+F9) is a multie-level toggle key which does not work in the same way as the standard on/off toggle or up+down keys which are available. So instead, this has been mapped to `prog2` so that it can be mapped as a custom keyboard shortcut and then some additional software (e.g. a script or service) can handle the different levels.
-- The "Camera privacy toggle" key (Fn+F10) is mapped to `prog3` so it can also be mapped to a custom keyboard shortcut
+- The "Keyboard backlight" key (Fn+F9) is a multi-level toggle key which does not work in the same way as the standard on/off toggle or up+down keys which are typically available. So instead, this has been mapped to `prog2` so that it can be mapped as a custom keyboard shortcut and then some additional software (e.g. a script or service) can handle rotating through the different brightness levels.
+- The "Camera privacy toggle" key (Fn+F10) is mapped to `camera` so it can also be mapped to a custom keyboard shortcut.
+- The "Fn Lock toggle" key (Fn+F12) generates two different events: one when it is turned "on", and a different one when it is turned "off". I have mapped them to F14 (XF86Launch5) and F15 (XF86Launch6) respectively, just so that these can also be mapped to a custom keyboard shortcut for the sake of some kind of on-screen notification
+- If you have enabled `battery_saver`, when the batter charge reaches 85% and stops then an input event is automatically generated to the standard keyboard device. This event I have mapped to `prog4` so that it too can be mapped to a custom keyboard shortcut for the sake of some kind of on-screen notification
 - Unforunately, the "Performance mode" key (Fn+F11) does not seem to report from the standard keyboard device, and I have not yet found where its input can be monitored, so it is still not currently supported.
 
 ### Matching additional device keyboards

@@ -15,6 +15,7 @@ else
 fi
 
 echo "Copying scripts..."
+sudo rm -rf /opt/samsung-galaxybook-extras
 sudo mkdir -p /opt/samsung-galaxybook-extras
 sudo cp scripts/* /opt/samsung-galaxybook-extras/
 
@@ -32,22 +33,32 @@ read SHOULD_IMPORT_KEYBINDINGS
 
 if [ "$SHOULD_IMPORT_KEYBINDINGS" != "${SHOULD_IMPORT_KEYBINDINGS#[Yy]}" ]; then
 
+    # For possible key names, see: https://github.com/GNOME/gtk/blob/main/gdk/keynames.txt
+
     kb=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
     dconf reset -f $kb/
 
-    dconf write $kb/custom0/name "'Settings'"
-    dconf write $kb/custom0/binding "'Launch1'"
-    dconf write $kb/custom0/command "'gnome-control-center'"
+    dconf write $kb/custom0/name "'Keyboard Brightness Toggle'"
+    dconf write $kb/custom0/binding "'Launch2'"
+    dconf write $kb/custom0/command "'/opt/samsung-galaxybook-extras/toggle-keyboard-brightness.sh'"
 
-    dconf write $kb/custom1/name "'Keyboard Brightness'"
-    dconf write $kb/custom1/binding "'Launch2'"
-    dconf write $kb/custom1/command "'/opt/samsung-galaxybook-extras/toggle-keyboard-brightness.sh'"
+    dconf write $kb/custom1/name "'Camera Privacy Toggle'"
+    dconf write $kb/custom1/binding "'WebCam'"
+    dconf write $kb/custom1/command "'/opt/samsung-galaxybook-extras/toggle-webcam.sh'"
 
-    dconf write $kb/custom2/name "'Camera Privacy'"
-    dconf write $kb/custom2/binding "'Launch3'"
-    dconf write $kb/custom2/command "'/opt/samsung-galaxybook-extras/toggle-webcam.sh'"
+    dconf write $kb/custom2/name "'Battery Saver Stopped Charging Notification'"
+    dconf write $kb/custom2/binding "'Launch4'"
+    dconf write $kb/custom2/command "'/opt/samsung-galaxybook-extras/notify-battery-saver-stopped-charging.sh'"
 
-    dconf write $kb "['$kb/custom0/', '$kb/custom1/', '$kb/custom2/']"
+    dconf write $kb/custom3/name "'Fn Lock On Notification'"
+    dconf write $kb/custom3/binding "'Launch5'"
+    dconf write $kb/custom3/command "'/opt/samsung-galaxybook-extras/notify-fn-lock-on.sh'"
+
+    dconf write $kb/custom4/name "'Fn Lock Off Notification'"
+    dconf write $kb/custom4/binding "'Launch6'"
+    dconf write $kb/custom4/command "'/opt/samsung-galaxybook-extras/notify-fn-lock-off.sh'"
+
+    dconf write $kb "['$kb/custom0/', '$kb/custom1/', '$kb/custom2/', '$kb/custom3/', '$kb/custom4/']"
 
     echo "Completed reset and import of GNOME Custom Keyboard Shortcuts."
 
