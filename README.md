@@ -22,17 +22,42 @@ This is a new and (currently) completely out-of-tree kernel platform driver inte
 
 The following features are currently implemented:
 
+- An *early* attempt to support hotkey handling (currently supports only keyboard backlight)
 - Keyboard backlight
 - Battery saver (stop charging at 85%)
 - Start device automatically when opening lid
 - USB ports provide charging when device is turned off
+- Fan speed monitoring via `fan_speed_rpm` sysfs attribute plus a new hwmon device.
 - Performance mode (High performance, Optimized, Quiet, Silent) *note: setting is supported and seems to be working, but I have not found a way to read the current value from the device; see below*
 
 The following features might be possible to implement but require  additional debugging and development:
 
 - "Dolby Atmos" mode for the speakers
-- Fan speed monitoring (`_FST` method is present on the device in ACPI but not sure why it is coming through yet?)
 - Capture input of the Performance mode hotkey (Fn+F11) (it does not come via the main keyboard device nor does it seem to notify the `SCAI` ACPI device)
+
+### General observations
+
+One general observation that I have made is that there are in fact quite a lot of bugs in Samsung's firmware for these devices, for example:
+
+- Exceptions thrown from the firmware itself when certain ACPI methods are executed (both in Windows and in Linux)
+- ACPI specification has not been followed 100% in some cases (mismatched method signatures e.g. wrong data types for parameters and return values, missing fields or methods, etc)
+- etc
+
+And then that I have seen a bit of "flakiness" from the device when these kind of issues happen. One of the most noticeable is that the keyboard backlight starts to turn off by itself when such problems occur; this needs to be investigated further.
+
+It would be great if we could actually get some help from Samsung regarding this!
+
+### Hotkeys
+
+Samsung have decided to use the main keyboard device to also send most of the hotkey events. If the driver wishes to capture and act on these hotkeys, then we will have to do something like using a i8402 filter to "catch" the key events.
+
+I have also found that some of the hotkey events have conflicts so it is a bit of a tricky territory. As such, this "feature" is in very early stages!
+
+#### Keyboard backlight hotkey
+
+Currently the only key supported is the keyboard backlight key (Fn+F9). The action will be triggered on keyup of the hotkey as the event reported by keydown seems to be the same event for battery charging progress (and thus things get a little crazy when you start charging!).
+
+The hotkey should also trigger the hardware changed event for the LED, which in GNOME automatically displays a nice OSD popup with the correct baclight level displayed.
 
 ### Keyboard backlight
 
@@ -41,8 +66,6 @@ A new LED class called `samsung-galaxybook::kbd_backlight` is created which can 
 It also seems to be picked up automatically in GNOME 45.x in the panel, where you can click the arrow beside `Keyboard` and adjust the slider:
 
 ![GNOME Panel Keyboard Backlight](./resources/keyboard-backlight-gnome.png "GNOME Panel Keyboard Backlight")
-
-I have also included a simple `toggle-keyboard-brightness` script along with the "extras" package as well as remapped the keyboard key Fn+F9 so that it will execute this script (assuming you are using GNOME).
 
 Note that the setting "automatically turn off the keyboard backlight after X seconds" in Windows is actually controlled by Samsung's application service and not by the device driver itself; if such a feature is desired then it would need to be a similar software-based solution (e.g. added to the "extras" or something).
 
@@ -100,6 +123,35 @@ My own observations on how this feature appears to work (which has nothing to do
 - Only the USB-C ports are impacted by this setting, and not the USB-A ports (at least this is the case on the Galaxy Book2 Pro).
 - When the setting is turned on and you plug in a mobile phone or similar to one of the USB-C ports, then the phone will begin charging from the laptop's battery.
 - When the setting is turned off and you plug in a mobile phone, the laptop battery will actually start charging from the phone's battery.
+
+### Fan speed
+
+Samsung has implemented the ACPI method `_FST` for the fan device, but not the other optional methods in the ACPI specification which would cause the kernel to automatically add the `fan_speed_rpm` attribute. On top of this, it seems that there are some bugs in the firmware that throw an exception when you try to execute this ACPI method. This behavior is also seen in Windows (that an ACPI exception is thrown when the fan speed is attempted to be checked).
+
+However, I believe I have succeeded in figuring out roughly the intention of how their `_FST` method is supposed to work:
+
+1. There is a data package `FANT` ("fan table"??) which seems to be some kind of list of possible RPM speeds that the fan can run at.
+2. There is a data field on the embedded controller called `FANS` ("fan speed"??) which seems to give the current "level" that the fan is operating at.
+
+I have **assumed** that the values from `FANT` are integers which represent the actual RPM values (they seem reasonble, anyway), but can't be one hundred percent certain. It would be interesting to get confirmation from Samsung or if someone had a way to measure the actual speed of the fan!
+
+The fan can either be completely off (0) or one of the levels represented by the speeds in `FANT`. This driver reads the values in from `FANT` instead of hard-coding the levels with the assumption that it could be different values and a different number of levels for different devices. For reference, the values I see with my Galaxy Book2 Pro are:
+
+- 0x0 (0)
+- 0xdac (3500)
+- 0xee2 (3820)
+- 0x1144 (4420)
+- 0x127a (4730)
+
+The fan speed can be monitored using hwmon sensors or by reading the `fan_speed_rpm` sysfs attribute.
+
+```sh
+# read current fan speed rpm from sysfs attribute
+cat /sys/bus/acpi/devices/PNP0C0B\:00/fan_speed_rpm
+
+# read current fan speed rpm from hwmon device
+sensors
+```
 
 ### Performance mode
 

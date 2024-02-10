@@ -38,27 +38,19 @@ if [ "$SHOULD_IMPORT_KEYBINDINGS" != "${SHOULD_IMPORT_KEYBINDINGS#[Yy]}" ]; then
     kb=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
     dconf reset -f $kb/
 
-    dconf write $kb/custom0/name "'Keyboard Brightness Toggle'"
-    dconf write $kb/custom0/binding "'Launch2'"
-    dconf write $kb/custom0/command "'/opt/samsung-galaxybook-extras/toggle-keyboard-brightness.sh'"
+    dconf write $kb/custom0/name "'Camera Privacy Toggle'"
+    dconf write $kb/custom0/binding "'WebCam'"
+    dconf write $kb/custom0/command "'/opt/samsung-galaxybook-extras/toggle-webcam.sh'"
 
-    dconf write $kb/custom1/name "'Camera Privacy Toggle'"
-    dconf write $kb/custom1/binding "'WebCam'"
-    dconf write $kb/custom1/command "'/opt/samsung-galaxybook-extras/toggle-webcam.sh'"
+    dconf write $kb/custom1/name "'Fn Lock On Notification'"
+    dconf write $kb/custom1/binding "'Launch5'"
+    dconf write $kb/custom1/command "'/opt/samsung-galaxybook-extras/notify-fn-lock-on.sh'"
 
-    dconf write $kb/custom2/name "'Battery Saver Stopped Charging Notification'"
-    dconf write $kb/custom2/binding "'Launch4'"
-    dconf write $kb/custom2/command "'/opt/samsung-galaxybook-extras/notify-battery-saver-stopped-charging.sh'"
+    dconf write $kb/custom2/name "'Fn Lock Off Notification'"
+    dconf write $kb/custom2/binding "'Launch6'"
+    dconf write $kb/custom2/command "'/opt/samsung-galaxybook-extras/notify-fn-lock-off.sh'"
 
-    dconf write $kb/custom3/name "'Fn Lock On Notification'"
-    dconf write $kb/custom3/binding "'Launch5'"
-    dconf write $kb/custom3/command "'/opt/samsung-galaxybook-extras/notify-fn-lock-on.sh'"
-
-    dconf write $kb/custom4/name "'Fn Lock Off Notification'"
-    dconf write $kb/custom4/binding "'Launch6'"
-    dconf write $kb/custom4/command "'/opt/samsung-galaxybook-extras/notify-fn-lock-off.sh'"
-
-    dconf write $kb "['$kb/custom0/', '$kb/custom1/', '$kb/custom2/', '$kb/custom3/', '$kb/custom4/']"
+    dconf write $kb "['$kb/custom0/', '$kb/custom1/', '$kb/custom2/']"
 
     echo "Completed reset and import of GNOME Custom Keyboard Shortcuts."
 
