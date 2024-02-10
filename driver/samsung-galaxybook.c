@@ -25,6 +25,8 @@
 #define ACPI_METHOD_SETTINGS "CSFI"
 #define ACPI_METHOD_PERFORMANCE_MODE "CSXI"
 
+#define GALAXYBOOK_STARTUP_PROFILE PLATFORM_PROFILE_BALANCED
+
 static const struct acpi_device_id galaxybook_device_ids[] = {
 	{ "SAM0429", 0 },
 	{ "", 0 },
@@ -49,9 +51,7 @@ struct samsung_galaxybook {
 	struct platform_device *platform;
 	struct led_classdev kbd_backlight;
 	struct platform_profile_handler profile_handler;
-	// This is initialized by the ACPI init function, but used by the platform
-	// profile handler only
-	enum platform_profile_option last_performance_mode;
+	enum platform_profile_option current_profile;
 };
 
 /*
@@ -598,7 +598,29 @@ out_free:
 static DEVICE_ATTR_RW(usb_charging);
 
 
-/* Performance mode */
+/* Add attributes to necessary groups etc */
+
+static struct attribute *galaxybook_attrs[] = {
+	&dev_attr_battery_saver.attr,
+//	&dev_attr_dolby_atmos.attr,
+	&dev_attr_start_on_lid_open.attr,
+	&dev_attr_usb_charging.attr,
+	NULL
+};
+
+static const struct attribute_group galaxybook_attr_group = {
+	.attrs = galaxybook_attrs,
+};
+
+static const struct attribute_group *galaxybook_attr_groups[] = {
+	&galaxybook_attr_group,
+	NULL
+};
+
+
+/*
+ * Platform Profile / Performance mode
+ */
 
 typedef enum {
 	PERFORMANCE_MODE_SILENT = 0x0b,
@@ -607,37 +629,41 @@ typedef enum {
 	PERFORMANCE_MODE_HIGH_PERFORMANCE = 0x15,
 } galaxybook_performance_mode;
 
-/* Map all the profiles, even though we will mark only some of them as supported */
-static galaxybook_performance_mode standard_mode_to_galaxybook(enum platform_profile_option mode)
+static const char * const galaxybook_performance_mode_names[] = {
+	[PERFORMANCE_MODE_SILENT] = "silent",
+	[PERFORMANCE_MODE_QUIET] = "quiet",
+	[PERFORMANCE_MODE_OPTIMIZED] = "optimized",
+	[PERFORMANCE_MODE_HIGH_PERFORMANCE] = "high-performance",
+};
+
+static galaxybook_performance_mode profile_performance_mode(enum platform_profile_option profile)
 {
-	switch (mode) {
+	/* Map all the profiles even though we will mark only some of them as supported */
+	switch (profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
-	case PLATFORM_PROFILE_COOL:
 		return PERFORMANCE_MODE_SILENT;
+	case PLATFORM_PROFILE_COOL:
 	case PLATFORM_PROFILE_QUIET:
 		return PERFORMANCE_MODE_QUIET;
+	case PLATFORM_PROFILE_PERFORMANCE:
+		return PERFORMANCE_MODE_HIGH_PERFORMANCE;
 	case PLATFORM_PROFILE_BALANCED:
 	case PLATFORM_PROFILE_BALANCED_PERFORMANCE:
-		return PERFORMANCE_MODE_OPTIMIZED;
-	case PLATFORM_PROFILE_PERFORMANCE:
 	default:
-		return PERFORMANCE_MODE_HIGH_PERFORMANCE;
+		return PERFORMANCE_MODE_OPTIMIZED;
 	}
 }
 
-#define PERFORMANCE_MODE_AT_STARTUP PLATFORM_PROFILE_BALANCED
-
-static int performance_mode_set(struct platform_profile_handler *pprof,
+static int platform_profile_set(struct platform_profile_handler *pprof,
 									enum platform_profile_option profile)
 {
-
 	struct samsung_galaxybook *galaxybook = container_of(pprof,
 			struct samsung_galaxybook, profile_handler);
 	union acpi_object in_obj;
 	struct acpi_object_list params;
 	acpi_status status;
 
-	int value = standard_mode_to_galaxybook(profile);
+	galaxybook_performance_mode performance_mode = profile_performance_mode(profile);
 
 	u8 set_payload[256] = { 0 };
 
@@ -664,7 +690,7 @@ static int performance_mode_set(struct platform_profile_handler *pprof,
 	set_payload[21] = 0x51;
 	set_payload[22] = 0x03;
 
-	set_payload[23] = value;
+	set_payload[23] = performance_mode;
 
 	in_obj.type 			= ACPI_TYPE_BUFFER;
 	in_obj.buffer.length 	= sizeof(set_payload);
@@ -687,38 +713,44 @@ static int performance_mode_set(struct platform_profile_handler *pprof,
 		return -ENXIO;
 	}
 
-	pr_info("set performance_mode to %d\n", value);
-	galaxybook->last_performance_mode = profile;
+	pr_info("set performance_mode to '%s'\n",
+			galaxybook_performance_mode_names[performance_mode]);
+	galaxybook->current_profile = profile;
 	return 0;
 }
 
-static int performance_mode_get(struct platform_profile_handler *pprof,
+static int platform_profile_get(struct platform_profile_handler *pprof,
 									enum platform_profile_option *profile)
 {
 	struct samsung_galaxybook *galaxybook = container_of(pprof,
 			struct samsung_galaxybook, profile_handler);
-	*profile = galaxybook->last_performance_mode;
+	*profile = galaxybook->current_profile;
 	return 0;
 }
 
-/* Add attributes to necessary groups etc */
+static int galaxybook_profile_init(struct samsung_galaxybook *galaxybook)
+{
+	int err;
 
-static struct attribute *galaxybook_attrs[] = {
-	&dev_attr_battery_saver.attr,
-//	&dev_attr_dolby_atmos.attr,
-	&dev_attr_start_on_lid_open.attr,
-	&dev_attr_usb_charging.attr,
-	NULL
-};
+	galaxybook->profile_handler.profile_get = platform_profile_get;
+	galaxybook->profile_handler.profile_set = platform_profile_set;
 
-static const struct attribute_group galaxybook_attr_group = {
-	.attrs = galaxybook_attrs,
-};
+	set_bit(PLATFORM_PROFILE_LOW_POWER, galaxybook->profile_handler.choices);
+	set_bit(PLATFORM_PROFILE_QUIET, galaxybook->profile_handler.choices);
+	set_bit(PLATFORM_PROFILE_BALANCED, galaxybook->profile_handler.choices);
+	set_bit(PLATFORM_PROFILE_PERFORMANCE, galaxybook->profile_handler.choices);
 
-static const struct attribute_group *galaxybook_attr_groups[] = {
-	&galaxybook_attr_group,
-	NULL
-};
+	err = platform_profile_register(&galaxybook->profile_handler);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+static void galaxybook_profile_exit(struct samsung_galaxybook *galaxybook)
+{
+	platform_profile_remove();
+}
 
 
 /*
@@ -759,33 +791,6 @@ static void galaxybook_platform_exit(struct samsung_galaxybook *galaxybook)
 	platform_device_unregister(galaxybook->platform);
 }
 
-/*
- * Platform Profile
- */
-
-static int galaxybook_profile_init(struct samsung_galaxybook *galaxybook)
-{
-	int err;
-
-	galaxybook->profile_handler.profile_get = performance_mode_get;
-	galaxybook->profile_handler.profile_set = performance_mode_set;
-
-	set_bit(PLATFORM_PROFILE_LOW_POWER, galaxybook->profile_handler.choices);
-	set_bit(PLATFORM_PROFILE_QUIET, galaxybook->profile_handler.choices);
-	set_bit(PLATFORM_PROFILE_BALANCED, galaxybook->profile_handler.choices);
-	set_bit(PLATFORM_PROFILE_PERFORMANCE, galaxybook->profile_handler.choices);
-
-	err = platform_profile_register(&galaxybook->profile_handler);
-	if (err)
-		return err;
-
-	return 0;
-}
-
-static void galaxybook_profile_exit(struct samsung_galaxybook *galaxybook)
-{
-	platform_profile_remove();
-}
 
 /*
  * ACPI
@@ -962,9 +967,9 @@ static int galaxybook_acpi_init(struct samsung_galaxybook *galaxybook)
 	// without always ensuring to set a performance mode here, the kbd_backlight has intermittent problems
 	// TODO: better if this is based on some user-desired value and not hard-coded to 'optimized'
 
-	galaxybook->last_performance_mode = PERFORMANCE_MODE_AT_STARTUP;
+	galaxybook->current_profile = GALAXYBOOK_STARTUP_PROFILE;
 	init_perf_payload[22] = 0x03;
-	init_perf_payload[23] = standard_mode_to_galaxybook(galaxybook->last_performance_mode);
+	init_perf_payload[23] = profile_performance_mode(galaxybook->current_profile);
 
 	status = acpi_evaluate_object(galaxybook->acpi->handle,
 			ACPI_METHOD_PERFORMANCE_MODE, &params, NULL);
@@ -976,8 +981,8 @@ static int galaxybook_acpi_init(struct samsung_galaxybook *galaxybook)
 		return -ENXIO;
 	}
 
-	pr_info("performance_mode initialized with startup value of %d\n",
-			init_perf_payload[23]);
+	pr_info("performance_mode initialized with startup value of '%s'\n",
+			galaxybook_performance_mode_names[profile_performance_mode(galaxybook->current_profile)]);
 
 	return 0;
 }
@@ -1011,27 +1016,27 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (err)
 		goto err_free;
 
-	pr_info("initializing platform profile\n");
-	err = galaxybook_profile_init(galaxybook);
-	if (err)
-		goto err_acpi_exit;
-
 	pr_info("initializing platform device\n");
 	err = galaxybook_platform_init(galaxybook);
 	if (err)
-		goto err_profile_exit;
+		goto err_acpi_exit;
+
+	pr_info("initializing platform profile\n");
+	err = galaxybook_profile_init(galaxybook);
+	if (err)
+		goto err_platform_exit;
 
 	pr_info("initializing kbd_backlight\n");
 	err = galaxybook_kbd_backlight_init(galaxybook);
 	if (err)
-		goto err_platform_exit;
+		goto err_profile_exit;
 
 	return 0;
 
-err_platform_exit:
-	galaxybook_platform_exit(galaxybook);
 err_profile_exit:
 	galaxybook_profile_exit(galaxybook);
+err_platform_exit:
+	galaxybook_platform_exit(galaxybook);
 err_acpi_exit:
 	galaxybook_acpi_exit(galaxybook);
 err_free:
@@ -1044,8 +1049,8 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 	struct samsung_galaxybook *galaxybook = acpi_driver_data(device);
 
 	galaxybook_kbd_backlight_exit(galaxybook);
-	galaxybook_platform_exit(galaxybook);
 	galaxybook_profile_exit(galaxybook);
+	galaxybook_platform_exit(galaxybook);
 	galaxybook_acpi_exit(galaxybook);
 
 	kfree(galaxybook);

@@ -48,17 +48,17 @@ Note that the setting "automatically turn off the keyboard backlight after X sec
 
 ### Battery saver
 
-To turn on or off the "Battery saver" mode (battery will stop charging at 85%), there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/battery_saver` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "Battery saver" mode (battery will stop charging at 85%), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/battery_saver` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/bus/platform/devices/samsung-galaxybook/battery_saver
+cat /sys/devices/platform/samsung-galaxybook/battery_saver
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/battery_saver
+echo true | sudo tee /sys/devices/platform/samsung-galaxybook/battery_saver
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/battery_saver
+echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/battery_saver
 ```
 
 > **Note:** I have noticed that if you are currently plugged in with the setting turned on and already sitting at 85%, then disable this setting (with the idea that you wish to charge to 100%), charging does not seem to start automatically. It may be necessary to disconnect and reconnect the charging cable in this case. The Windows driver seems to be doing some hocus pocus with the ACPI battery device that I have not quite sorted out yet; I am assuming this is how they made it work more seamlessly in Windows?
@@ -67,32 +67,32 @@ There is also an input event sent to the standard keyboard which is generated wh
 
 ### Start on lid open
 
-To turn on or off the "Start on lid open" setting (the laptop will  power on automatically when opening the lid), there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "Start on lid open" setting (the laptop will  power on automatically when opening the lid), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/start_on_lid_open` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open
+cat /sys/devices/platform/samsung-galaxybook/start_on_lid_open
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open
+echo true | sudo tee /sys/devices/platform/samsung-galaxybook/start_on_lid_open
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/start_on_lid_open
+echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/start_on_lid_open
 ```
 
 ### USB Charging mode
 
-To turn on or off the "USB Charging" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/usb_charging` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "USB Charging" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/usb_charging` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/bus/platform/devices/samsung-galaxybook/usb_charging
+cat /sys/devices/platform/samsung-galaxybook/usb_charging
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/bus/platform/devices/samsung-galaxybook/usb_charging
+echo true | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charging
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/usb_charging
+echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charging
 ```
 
 My own observations on how this feature appears to work (which has nothing to do with this driver itself, actually):
