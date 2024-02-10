@@ -103,38 +103,29 @@ My own observations on how this feature appears to work (which has nothing to do
 
 ### Performance mode
 
-To modify the "performance mode", there is a new device attribute created at `/sys/bus/platform/devices/samsung-galaxybook/performance_mode` which can be written to. You can write to this value with either a number (0 through 3) or with one of the modes' text-based names:
+To modify the "performance mode", the driver implements the [`platform_profile` interface](https://www.kernel.org/doc/html/latest/userspace-api/sysfs-platform_profile.html). The following strings can be written to `/sys/firmware/acpi/platform_profile` to set the performance mode:
 
-- Silent
-- Quiet
-- Optimized
-- High performance
-
-Using these text-based names is not case sensitive so you can write in upper, lower, or mixed case.
+- `low-power` (Silent)
+- `quiet` (Quiet)
+- `balanced` (Optimized, default value if not set)
+- `performance` (High Performance)
 
 Examples:
 
 ```sh
-# set performance_mode to Silent
-echo 0 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
-echo silent | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
+# Get supported performance modes
+cat /sys/firmware/acpi/platform_profile_choices
 
-# set performance_mode to Quiet
-echo 1 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
-echo QUIET | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
+# set performance_mode to low-power
+echo low-power | sudo tee /sys/firmware/acpi/platform_profile
 
-# set performance_mode to Optimized
-echo 2 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
-echo OptiMIzed | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
-
-# set performance_mode to High performance
-echo 3 | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
-echo High Performance | sudo tee /sys/bus/platform/devices/samsung-galaxybook/performance_mode
+# get current performance_mode
+cat /sys/firmware/acpi/platform_profile
 ```
 
-**Note:** To match the logic in the Windows driver, as well as avoid causing issues with other features, the driver currently will always set the performance mode to "Optimized" every time during its initialization (e.g. upon startup). Ideally, there would be a way to "store" and read the startup value somehow (see below for more information on limitations surrounding this).
+**Note:** To match the logic in the Windows driver, as well as avoid causing issues with other features, the driver currently will always set the performance mode to "Optimized" every time during its initialization (e.g. upon startup).
 
-It should be possible to set your own desired startup performance mode using `sysfsutils`, some kind of startup script, etc.
+It should be possible to set your own desired startup performance mode or to save and restore the mode across reboots, you can eiter use a startup script or install TLP, power-profiles-daemon, or similar.
 
 #### Limitations reading performance_mode
 
@@ -144,9 +135,7 @@ At the same time, I have a suspicion that this might actually be controlled in W
 
 I suppose that we could do similar on the Linux side (and might need to, actually), either via something like `sysfsutils` or with whatever eventually comes in the "Samsung Galaxybook Extras".
 
-In light of this, for now I have allowed reading of `/sys/bus/platform/devices/samsung-galaxybook/performance_mode` (via `cat`, for example), but please remember that it will only give the correct value if a value has first been set by the driver since the last time the driver has been loaded (a restart, for example). The "latest" set value is just stored in a local variable in the driver code itself.
-
-If the value has not been set by the driver, reading the attribute value will be answered with a text response of `unknown`. Otherwise, it will answer with the last value set from the driver (either the startup default or something you have set it to).
+In light of this, for now I have allowed reading of `/sys/firmware/acpi/platform_profile` (via `cat`, for example), but please remember that it will only echo back the value that was last set by the driver, which under normal circumstances will the one active in the hardware.
 
 #### Does this performance_mode actually work?
 
