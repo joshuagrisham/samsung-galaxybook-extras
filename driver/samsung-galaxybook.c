@@ -687,18 +687,35 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 		goto out_free;
 	}
 
-	// fan_speeds[] starts with a hard-coded 0 (fan is off), then should be appended with the speed levels read in from FANT
-	galaxybook->fan_speeds = kzalloc(sizeof(unsigned int) * (obj->package.count + 1), GFP_KERNEL);
+	// fan_speeds[] starts with a hard-coded 0 (fan is off), then has some "funny" logic:
+	//   - fetch the speed level values read in from FANT and add 0x0a to each value
+	//   - _FST method in the DSDT seems to indicate that level 3 and 4 should have the same value, however real-life
+	//     observation suggests that the speed actually does change
+	//   - _FST says that level 5 should give the 4th value from FANT but it seems significantly louder -- we will just "guess"
+	//     it is 1000 RPM faster than the highest value from FANT?
+
+	galaxybook->fan_speeds = kzalloc(sizeof(unsigned int) * (obj->package.count + 2), GFP_KERNEL);
+
+	// hard-code off (0) value
 	galaxybook->fan_speeds[0] = 0;
 	galaxybook->fan_speeds_count = 1;
-	for (int i = 1; i <= obj->package.count; i++) {
+
+	// fetch and assign the next values from FANT response
+	int i = 0;
+	for (i = 1; i <= obj->package.count; i++) {
 		if (obj->package.elements[i-1].type != ACPI_TYPE_INTEGER) {
 			pr_err("Invalid fan speed list value at position %d (expected type %d, got type %d)\n",
 					i-1, ACPI_TYPE_INTEGER, obj->package.elements[i-1].type);
 			status = -EINVAL;
 			goto err_fan_speeds_free;
 		}
-		galaxybook->fan_speeds[i] = obj->package.elements[i-1].integer.value;
+		galaxybook->fan_speeds[i] = obj->package.elements[i-1].integer.value + 0x0a;
+		galaxybook->fan_speeds_count++;
+	}
+
+	// add the missing last level speed where we "guess" it is 1000 RPM faster than the highest level fetched from FANT
+	if (galaxybook->fan_speeds_count > 1) {
+		galaxybook->fan_speeds[i] = galaxybook->fan_speeds[i-1] + 1000;
 		galaxybook->fan_speeds_count++;
 	}
 

@@ -143,6 +143,8 @@ The fan can either be completely off (0) or one of the levels represented by the
 - 0x1144 (4420)
 - 0x127a (4730)
 
+On top of this, in Samsung's `_FST` method it seems to be adding `0x0a` (10) to each value before trying to report them, and that level 3 and 4 should have the same value, while level 5 should be the 4th value from `FANT`. However, real-life observation suggests that level 3 and 4 are in fact different, and that level 5 seems to be significantly louder than level 4. Due to this, this driver will just "guess" that levels 3 and 4 are actually as is listed in `FANT`, and that the last level is maybe 1000 RPM faster than level 4 (unless anyone can find something better than this!).
+
 The fan speed can be monitored using hwmon sensors or by reading the `fan_speed_rpm` sysfs attribute.
 
 ```sh
