@@ -22,9 +22,9 @@ This is a new and (currently) completely out-of-tree kernel platform driver inte
 
 The following features are currently implemented:
 
-- An *early* attempt to support hotkey handling (currently supports only keyboard backlight)
+- An *early* attempt to support hotkey handling (supports only keyboard backlight and performance mode toggle at this time)
 - Keyboard backlight
-- Battery saver (stop charging at 85%)
+- Battery saver (stop charging at 80%)
 - Start device automatically when opening lid
 - USB ports provide charging when device is turned off
 - Fan speed monitoring via `fan_speed_rpm` sysfs attribute plus a new hwmon device.
@@ -33,7 +33,22 @@ The following features are currently implemented:
 The following features might be possible to implement but require  additional debugging and development:
 
 - "Dolby Atmos" mode for the speakers
-- Capture input of the Performance mode hotkey (Fn+F11) (it does not come via the main keyboard device nor does it seem to notify the `SCAI` ACPI device)
+
+### Module Parameters
+
+The platform driver supports the following module parameters:
+
+- `kbd_backlight`: Enable Keyboard Backlight control (default on) (bool)
+- `performance_mode`: Enable Performance Mode control (default on) (bool)
+- `fan_speed`: Enable fan speed (default on) (bool)
+- `i8042_filter`: Enable capturing keyboard hotkey events (default on) (bool)
+- `acpi_hotkeys`: Enable ACPI hotkey events (default on) (bool)
+- `wmi_hotkeys`: Enable WMI hotkey events (default on) (bool)
+- `debug`: Enable debug messages (default off) (bool)
+
+In general the intention of these parameters is to allow for enabling or disabling of various features provided by the driver, especially in cases where a particular feature does not appear to work with your device. The availability of the various "settings" flags (`battery_saver`, `start_on_lid_open`, etc) will always be enabled and cannot be disabled at this time.
+
+> **Note:** Please raise an issue if you find that you need to disable a certain feature in order to avoid a problem that it causes with your device!
 
 ### General observations
 
@@ -43,7 +58,7 @@ One general observation that I have made is that there are in fact quite a lot o
 - ACPI specification has not been followed 100% in some cases (mismatched method signatures e.g. wrong data types for parameters and return values, missing fields or methods, etc)
 - etc
 
-And then that I have seen a bit of "flakiness" from the device when these kind of issues happen. One of the most noticeable is that the keyboard backlight starts to turn off by itself when such problems occur; this needs to be investigated further.
+And then that I have seen a bit of "flakiness" from the device when these kind of issues happen. One of the most noticeable is that the keyboard backlight starts to turn off by itself when such problems occur; this needs to be investigated further. One tip that I have found is that booting into Windows and starting/restarting the Samsung services seem to help "reset" some of this behavior (a clue that I still don't quite have some things 100% right!).
 
 It would be great if we could actually get some help from Samsung regarding this!
 
@@ -53,11 +68,19 @@ Samsung have decided to use the main keyboard device to also send most of the ho
 
 I have also found that some of the hotkey events have conflicts so it is a bit of a tricky territory. As such, this "feature" is in very early stages!
 
-#### Keyboard backlight hotkey
+#### Keyboard backlight hotkey (Fn+F9)
 
-Currently the only key supported is the keyboard backlight key (Fn+F9). The action will be triggered on keyup of the hotkey as the event reported by keydown seems to be the same event for battery charging progress (and thus things get a little crazy when you start charging!).
+The keyboard backlight hotkey will cycle through all available backlight brightnesses in a round-robin manner, starting again at 0 when the maximum is reached (i.e. 0, 1, 2, 3, 0, 1, ...).
+
+The action will be triggered on keyup of the hotkey as the event reported by keydown seems to be the same event for battery charging progress (and thus things get a little crazy when you start charging!).
 
 The hotkey should also trigger the hardware changed event for the LED, which in GNOME automatically displays a nice OSD popup with the correct baclight level displayed.
+
+#### Performance mode hotkey (Fn+F11)
+
+The performance mode hotkey will also cycle through all available platform profiles in a round-robin manner (low-power, quiet, balanced, performance, low-power, quiet, ...).
+
+There is currently no OSD popup but the event can be captured from the "Samsung Galaxybook extra buttons" input device if desired.
 
 ### Keyboard backlight
 
@@ -71,7 +94,7 @@ Note that the setting "automatically turn off the keyboard backlight after X sec
 
 ### Battery saver
 
-To turn on or off the "Battery saver" mode (battery will stop charging at 85%), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/battery_saver` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "Battery saver" mode (battery will stop charging at 80%), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/battery_saver` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
@@ -84,9 +107,9 @@ echo true | sudo tee /sys/devices/platform/samsung-galaxybook/battery_saver
 echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/battery_saver
 ```
 
-> **Note:** I have noticed that if you are currently plugged in with the setting turned on and already sitting at 85%, then disable this setting (with the idea that you wish to charge to 100%), charging does not seem to start automatically. It may be necessary to disconnect and reconnect the charging cable in this case. The Windows driver seems to be doing some hocus pocus with the ACPI battery device that I have not quite sorted out yet; I am assuming this is how they made it work more seamlessly in Windows?
+> **Note:** I have noticed that if you are currently plugged in with the setting turned on and already sitting at 80%, then disable this setting (with the idea that you wish to charge to 100%), charging does not seem to start automatically. It may be necessary to disconnect and reconnect the charging cable in this case. The Windows driver seems to be doing some hocus pocus with the ACPI battery device that I have not quite sorted out yet; I am assuming this is how they made it work more seamlessly in Windows?
 
-There is also an input event sent to the standard keyboard which is generated when battery saver is enabled and charging reaches 85%; I have also mapped this in so that notifications can be displayed (see below in the keyboard remapping section).
+There is also an input event sent to the standard keyboard which is generated when battery saver is enabled and charging reaches 80%; I have also mapped this in so that notifications can be displayed (see below in the keyboard remapping section).
 
 ### Start on lid open
 
