@@ -24,6 +24,7 @@
 #include <linux/workqueue.h>
 #include <linux/input.h>
 #include <linux/input/sparse-keymap.h>
+#include <linux/version.h>
 
 #define SAMSUNG_GALAXYBOOK_CLASS  "samsung-galaxybook"
 #define SAMSUNG_GALAXYBOOK_NAME   "Samsung Galaxybook Extras"
@@ -1073,7 +1074,7 @@ static void galaxybook_performance_mode_hotkey_work(struct work_struct *work)
 {
 	struct samsung_galaxybook *galaxybook = container_of(work,
 			struct samsung_galaxybook, performance_mode_hotkey_work);
-	
+
 	platform_profile_set(&galaxybook->profile_handler,
 			performance_mode_hotkey_next_profile[galaxybook->current_profile]);
 
@@ -1646,7 +1647,10 @@ static struct acpi_driver galaxybook_acpi_driver = {
 		.remove = galaxybook_acpi_remove,
 		.notify = galaxybook_acpi_notify,
 		},
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
 	.owner = THIS_MODULE,
+#endif
 };
 
 static int __init samsung_galaxybook_init(void)
