@@ -29,20 +29,10 @@
 #define SAMSUNG_GALAXYBOOK_CLASS  "samsung-galaxybook"
 #define SAMSUNG_GALAXYBOOK_NAME   "Samsung Galaxybook Extras"
 
-#define GALAXYBOOK_ACPI_METHOD_SETTINGS         "CSFI"
-#define GALAXYBOOK_ACPI_METHOD_ENABLE_NOTIFY    "SDLS"
-#define GALAXYBOOK_ACPI_METHOD_PERFORMANCE_MODE "CSXI"
 
-#define GALAXYBOOK_ACPI_FAN_DEVICE_ID    "PNP0C0B"
-#define GALAXYBOOK_ACPI_FAN_SPEED_LIST   "\\_SB.PC00.LPCB.FAN0.FANT"
-#define GALAXYBOOK_ACPI_FAN_SPEED_VALUE  "\\_SB.PC00.LPCB.H_EC.FANS"
-
-#define GALAXYBOOK_KBD_BACKLIGHT_MAX_BRIGHTNESS  3
-
-#define GALAXYBOOK_STARTUP_PROFILE  PLATFORM_PROFILE_BALANCED
-
-#define GALAXYBOOK_ACPI_BATTERY_STATE_CHANGED    0x61
-#define GALAXYBOOK_ACPI_HOTKEY_PERFORMANCE_MODE  0x70
+/*
+ * Module parameters
+ */
 
 static bool kbd_backlight = true;
 static bool kbd_backlight_was_set;
@@ -64,7 +54,7 @@ static bool wmi_hotkeys_was_set;
 
 static bool debug = false;
 
-static void galaxybook_warn_param_override(const char *param_name)
+static void warn_param_override(const char *param_name)
 {
 	pr_warn("parameter '%s' has been overridden; if your device needs this in " \
 			"order to function properly, please create a new issue at " \
@@ -84,7 +74,7 @@ int galaxybook_param_set(const char *val, const struct kernel_param *kp) {
 		acpi_hotkeys_was_set = true;
 	if (strcmp(kp->name, "wmi_hotkeys") == 0)
 		wmi_hotkeys_was_set = true;
-	galaxybook_warn_param_override(kp->name);
+	warn_param_override(kp->name);
 	return param_set_bool(val, kp);
 }
 static struct kernel_param_ops galaxybook_module_param_ops = {
@@ -107,6 +97,11 @@ MODULE_PARM_DESC(wmi_hotkeys, "Enable WMI hotkey events (default on)");
 module_param(debug, bool, 0644);
 MODULE_PARM_DESC(debug, "Enable debug messages (default off)");
 
+
+/*
+ * Device matching and definitions
+ */
+
 struct galaxybook_device_quirks {
 	bool disable_kbd_backlight;
 	bool disable_performance_mode;
@@ -117,6 +112,7 @@ struct galaxybook_device_quirks {
 };
 
 static const struct galaxybook_device_quirks sam0427_quirks = {
+	.disable_performance_mode = true,
 	.disable_fan_speed = true,
 	.disable_i8042_filter = true,
 };
@@ -149,9 +145,13 @@ struct samsung_galaxybook {
 	struct input_dev *input;
 	struct key_entry *keymap;
 
+	u8 *performance_mode_values;
+	int performance_modes_count;
+
 	struct platform_profile_handler profile_handler;
-	enum platform_profile_option current_profile;
 	struct work_struct performance_mode_hotkey_work;
+
+	struct work_struct allow_recording_hotkey_work;
 
 	struct acpi_device fan;
 	unsigned int *fan_speeds;
@@ -163,11 +163,79 @@ struct samsung_galaxybook {
 };
 static struct samsung_galaxybook *galaxybook_ptr;
 
+#define ACPI_METHOD_ENABLE           "SDLS"
+#define ACPI_METHOD_SETTINGS         "CSFI"
+#define ACPI_METHOD_PERFORMANCE_MODE "CSXI"
+
+/* guid 8246028d-8bca-4a55-ba0f-6f1e6b921b8f */
+static const guid_t performance_mode_guid =
+	GUID_INIT(0x8246028d, 0x8bca, 0x4a55, 0xba, 0x0f, 0x6f, 0x1e, 0x6b, 0x92, 0x1b, 0x8f);
+#define PERFORMANCE_MODE_GUID performance_mode_guid
+
+#define DEFAULT_PLATFORM_PROFILE PLATFORM_PROFILE_BALANCED
+
+#define SAFN 0x5843
+
+#define SASB_KBD_BACKLIGHT    0x78
+#define SASB_POWER_MANAGEMENT 0x7a
+#define SASB_USB_CHARGING_GET 0x67
+#define SASB_USB_CHARGING_SET 0x68
+#define SASB_NOTIFICATIONS    0x86
+#define SASB_ALLOW_RECORDING  0x8a
+
+#define GUNM_SET 0x82
+#define GUNM_GET 0x81
+
+#define SAWB_LEN_SETTINGS 0x15
+#define SAWB_LEN_PERFORMANCE_MODE 0x100
+
+struct sawb {
+	u16 safn;
+	u16 sasb;
+	u8 rflg;
+	union {
+		struct {
+			u8 gunm;
+			u8 guds[250];
+		};
+		struct {
+			u8 caid[16];
+			u8 fncn;
+			u8 subn;
+			u8 iob0;
+			u8 iob1;
+			u8 iob2;
+			u8 iob3;
+			u8 iob4;
+			u8 iob5;
+			u8 iob6;
+			u8 iob7;
+			u8 iob8;
+			u8 iob9;
+		};
+	};
+};
+
+#define ACPI_FAN_DEVICE_ID    "PNP0C0B"
+#define ACPI_FAN_SPEED_LIST   "\\_SB.PC00.LPCB.FAN0.FANT"
+#define ACPI_FAN_SPEED_VALUE  "\\_SB.PC00.LPCB.H_EC.FANS"
+
+#define KBD_BACKLIGHT_MAX_BRIGHTNESS  3
+#define BATTERY_SAVER_PERCENTAGE      0x50
+
+#define ACPI_NOTIFY_BATTERY_STATE_CHANGED    0x61
+#define ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE  0x70
+
 static const struct key_entry galaxybook_acpi_keymap[] = {
-	{KE_KEY, GALAXYBOOK_ACPI_BATTERY_STATE_CHANGED, { KEY_BATTERY } },
-	{KE_KEY, GALAXYBOOK_ACPI_HOTKEY_PERFORMANCE_MODE, { KEY_PROG3 } },
+	{KE_KEY, ACPI_NOTIFY_BATTERY_STATE_CHANGED, { KEY_BATTERY } },
+	{KE_KEY, ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE, { KEY_PROG3 } },
 	{KE_END, 0},
 };
+
+
+/*
+ * ACPI method handling
+ */
 
 static void debug_print_acpi_object_buffer(const char *level, const char *header_str,
 				const union acpi_object *obj)
@@ -179,197 +247,180 @@ static void debug_print_acpi_object_buffer(const char *level, const char *header
 	}
 }
 
-static int check_acpi_response(const char *purpose_str, const struct acpi_buffer *response)
+static int galaxybook_acpi_method(struct samsung_galaxybook *galaxybook, acpi_string method,
+				struct sawb *buf, u32 len, const char *purpose_str, struct sawb *ret)
 {
-	union acpi_object *response_obj = response->pointer;
-
-	if (response_obj->type != ACPI_TYPE_BUFFER) {
-		pr_err("failed to get response from %s; response type was invalid\n",
-				purpose_str);
-		return -EIO;
-	}
-
-	if (response_obj->buffer.length < 6) {
-		pr_err("failed to get response from %s; response from device was too short\n",
-				purpose_str);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		return -EIO;
-	}
-
-	if (response_obj->buffer.pointer[5] == 0xff) {
-		pr_err("failed to get response from %s; failure code 0xff was reported from the device\n",
-				purpose_str);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		return -EIO;
-	}
-
-	debug_print_acpi_object_buffer(KERN_WARNING, "response was:", response_obj);
-
-	return 0;
-}
-
-static acpi_status exec_acpi(struct samsung_galaxybook *galaxybook,
-				acpi_string method,
-				const char *purpose_str,
-				u8 *payload,
-				const int payload_length,
-				struct acpi_buffer *return_object_buffer)
-{
-	union acpi_object in_obj;
-	struct acpi_object_list params;
+	union acpi_object in_obj, *out_obj;
+	struct acpi_object_list input;
+	struct acpi_buffer output = {ACPI_ALLOCATE_BUFFER, NULL};
 	acpi_status status;
 
-	in_obj.type 			= ACPI_TYPE_BUFFER;
-	in_obj.buffer.length 	= payload_length;
-	in_obj.buffer.pointer	= payload;
+	in_obj.type = ACPI_TYPE_BUFFER;
+	in_obj.buffer.length = len;
+	in_obj.buffer.pointer = (u8 *) buf;
 
-	params.count = 1;
-	params.pointer = &in_obj;
+	input.count = 1;
+	input.pointer = &in_obj;
 
 	debug_print_acpi_object_buffer(KERN_WARNING, purpose_str, &in_obj);
 
-	status = acpi_evaluate_object(galaxybook->acpi->handle,
-			method, &params, return_object_buffer);
+	status = acpi_evaluate_object(galaxybook->acpi->handle, method, &input, &output);
 
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+	if (ACPI_SUCCESS(status)) {
+		out_obj = output.pointer;
+		if (out_obj->type != ACPI_TYPE_BUFFER) {
+			pr_err("failed %s with ACPI method %s; response was not a buffer\n",
+					purpose_str,
+					method);
+			status = -EIO;
+		} else {
+			debug_print_acpi_object_buffer(KERN_WARNING, "response was:", out_obj);
+		}
+		if (out_obj->buffer.length != len) {
+			pr_err("failed %s with ACPI method %s; response length mismatch\n",
+					purpose_str,
+					method);
+			status = -EIO;
+		} else if (out_obj->buffer.length < 6) {
+			pr_err("failed %s with ACPI method %s; response from device was too short\n",
+					purpose_str,
+					method);
+			status = -EIO;
+		} else if (out_obj->buffer.pointer[5] == 0xff) {
+			pr_err("failed %s with ACPI method %s; failure code 0xff reported from device\n",
+					purpose_str,
+					method);
+			status = -EIO;
+		} else {
+			memcpy(ret, out_obj->buffer.pointer, len);
+		}
+		kfree(output.pointer);
+		return status;
+	} else {
 		pr_err("failed %s with ACPI method %s; got %s\n",
 				purpose_str,
 				method,
 				acpi_format_exception(status));
+		return status;
 	}
-
-	if (return_object_buffer) {
-		if (check_acpi_response(purpose_str, return_object_buffer) != 0) {
-			return -EIO;
-		}
-	}
-
-	return status;
 }
 
-static acpi_status exec_setting_acpi(struct samsung_galaxybook *galaxybook,
-				const char *purpose_str,
-				u8 *payload,
-				const int payload_length,
-				struct acpi_buffer *return_object_buffer)
+static int galaxybook_enable_acpi_feature(struct samsung_galaxybook *galaxybook, const u16 sasb)
 {
-	return exec_acpi(galaxybook, GALAXYBOOK_ACPI_METHOD_SETTINGS, purpose_str,
-			payload, payload_length, return_object_buffer);
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = sasb;
+	buf.gunm = 0xbb;
+	buf.guds[0] = 0xaa;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"enabling ACPI feature", &buf);
+	if (err)
+		return err;
+
+	if (buf.gunm != 0xdd && buf.guds[0] != 0xcc)
+		return -ENODEV;
+
+	return 0;
 }
 
-static acpi_status exec_performance_mode_acpi(struct samsung_galaxybook *galaxybook,
-				const char *purpose_str,
-				u8 *payload,
-				const int payload_length,
-				struct acpi_buffer *return_object_buffer)
-{
-	return exec_acpi(galaxybook, GALAXYBOOK_ACPI_METHOD_PERFORMANCE_MODE, purpose_str,
-			payload, payload_length, return_object_buffer);
-}
 
 /*
  * Keyboard Backlight
  */
 
-static enum led_brightness galaxybook_kbd_backlight_get(struct led_classdev *kbd_backlight)
+static int kbd_backlight_acpi_set(struct samsung_galaxybook *galaxybook,
+				const enum led_brightness brightness)
 {
-	return kbd_backlight->brightness;
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_KBD_BACKLIGHT;
+	buf.gunm = GUNM_SET;
+
+	buf.guds[0] = brightness;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"setting kbd_backlight brightness", &buf);
+	if (err)
+		return err;
+
+	galaxybook->kbd_backlight.brightness = brightness;
+
+	pr_info("set kbd_backlight brightness to %d\n", brightness);
+
+	return 0;
 }
 
-static int galaxybook_kbd_backlight_set(struct led_classdev *led,
-		enum led_brightness brightness)
+static int kbd_backlight_acpi_get(struct samsung_galaxybook *galaxybook,
+				enum led_brightness *brightness)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_KBD_BACKLIGHT;
+	buf.gunm = GUNM_GET;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"getting kbd_backlight brightness", &buf);
+	if (err)
+		return err;
+
+	*brightness = buf.gunm;
+	galaxybook->kbd_backlight.brightness = buf.gunm;
+
+	if (debug)
+		pr_warn("[DEBUG] current kbd_backlight brightness is %d\n", buf.gunm);
+
+	return 0;
+}
+
+static int kbd_backlight_store(struct led_classdev *led,
+		const enum led_brightness brightness)
 {
 	struct samsung_galaxybook *galaxybook = container_of(led,
 			struct samsung_galaxybook, kbd_backlight);
+	int err;
 
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	int response_brightness = -1;
+	err = kbd_backlight_acpi_set(galaxybook, brightness);
+	if (err)
+		return err;
 
-	u8 set_payload[21] = { 0 };
+	return 0;
+}
 
-	set_payload[0] = 0x43;
-	set_payload[1] = 0x58;
-	set_payload[2] = 0x78;
+static enum led_brightness kbd_backlight_show(struct led_classdev *led)
+{
+	struct samsung_galaxybook *galaxybook = container_of(led,
+			struct samsung_galaxybook, kbd_backlight);
+	enum led_brightness brightness;
+	int err;
 
-	set_payload[5] = 0x82;
-	set_payload[6] = brightness;
+	err = kbd_backlight_acpi_get(galaxybook, &brightness);
+	if (err)
+		return err;
 
-	status = exec_setting_acpi(galaxybook, "setting kbd_backlight brightness",
-			set_payload, sizeof(set_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	if (response_obj->buffer.length < 7) {
-		pr_err("failed to get response from setting kbd_backlight with ACPI method %s; " \
-				"response from device was too short\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		status = -EIO;
-		goto out_free;
-	}
-
-	response_brightness = response_obj->buffer.pointer[6] - 0x80;
-	if (debug) {
-		pr_warn("[DEBUG] returned brightness value was: 0x%02x " \
-				"(calculated brightness level as %d)\n",
-				response_obj->buffer.pointer[6],
-				response_brightness);
-	}
-
-	/* "set" should reply with:
-	 * {0x43, 0x58, 0x78, 0x00, 0xaa, 0x00, 0x80 + brightness, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read the response buffer and check this before continuing? */
-
-	galaxybook->kbd_backlight.brightness = response_brightness;
-	pr_info("set kbd_backlight brightness to %d\n", response_brightness);
-
-	goto out_free;
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return status;
+	return brightness;
 }
 
 static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 {
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
+	int err;
 
-	u8 init_payload[21] = { 0 };
-
-	init_payload[0] = 0x43;
-	init_payload[1] = 0x58;
-	init_payload[2] = 0x78;
-
-	init_payload[5] = 0xbb;
-	init_payload[6] = 0xaa;
-
-	status = exec_setting_acpi(galaxybook, "initializing kbd_backlight brightness",
-			init_payload, sizeof(init_payload), &response);
-	ACPI_FREE(response.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* "init" should reply with:
-	 * {0x43, 0x58, 0x78, 0x00, 0xaa, 0xdd, 0xcc, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read the response buffer and check this before continuing? */
-
-	pr_info("kbd_backlight successfully initialized via ACPI method %s\n",
-			GALAXYBOOK_ACPI_METHOD_SETTINGS);
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_KBD_BACKLIGHT);
+	if (err)
+		return err;
 
 	galaxybook->kbd_backlight = (struct led_classdev) {
-		.brightness_get = galaxybook_kbd_backlight_get,
-		.brightness_set_blocking = galaxybook_kbd_backlight_set,
+		.brightness_get = kbd_backlight_show,
+		.brightness_set_blocking = kbd_backlight_store,
 		.flags = LED_BRIGHT_HW_CHANGED,
 		.name = SAMSUNG_GALAXYBOOK_CLASS "::kbd_backlight",
-		.max_brightness = GALAXYBOOK_KBD_BACKLIGHT_MAX_BRIGHTNESS,
+		.max_brightness = KBD_BACKLIGHT_MAX_BRIGHTNESS,
 	};
 
 	pr_info("registering LED class %s\n",
@@ -391,131 +442,95 @@ static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
 
 /* Battery saver mode (stop charging battery at 80%) */
 
+static int battery_saver_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_POWER_MANAGEMENT;
+	buf.gunm = GUNM_SET;
+	buf.guds[0] = 0xe9;
+	buf.guds[1] = 0x90;
+
+	/* Payload value should be 0x50 (80%) to turn on, and 0x00 to turn off, to match latest driver
+	 * from Windows, and so that the Windows Samsung Settings app works correctly with this value.
+	 * It is actually possible to set other values (so take the input as an integer), but a
+	 * decision would need to be made if this makes sense or not (especially that it will break
+	 * compatibilty with Samsung Settings when booting into Windows). Also, a reasonable range would
+	 * need to be decided (e.g. only allow anything between 60 and 95%?). */
+	buf.guds[2] = value ? BATTERY_SAVER_PERCENTAGE : 0x00;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"setting battery_saver", &buf);
+	if (err)
+		return err;
+
+	if (buf.guds[1] != 0x90 && buf.guds[2] != (value ? BATTERY_SAVER_PERCENTAGE : 0x00)) {
+		pr_err("invalid response when setting battery_saver; returned value was: 0x%02x 0x%02x\n",
+				buf.guds[1], buf.guds[2]);
+		return -EINVAL;
+	}
+
+	pr_info("turned battery_saver %s\n", value ? "on (1)" : "off (0)");
+
+	return 0;
+}
+
+static int battery_saver_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_POWER_MANAGEMENT;
+	buf.gunm = 0x82;
+	buf.guds[0] = 0xe9;
+	buf.guds[1] = 0x91;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"getting battery_saver", &buf);
+	if (err)
+		return err;
+
+	*value = (buf.guds[1] == BATTERY_SAVER_PERCENTAGE ? 1 : 0);
+
+	if (debug) {
+		pr_warn("[DEBUG] battery_saver is currently %s (%d%%)\n",
+				(buf.guds[1] == BATTERY_SAVER_PERCENTAGE ? "on (1)" : "off (0)"), buf.guds[1]);
+	}
+
+	return 0;
+}
+
 static ssize_t battery_saver_store(struct device *dev, struct device_attribute *attr,
 				const char *buffer, size_t count)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
 	bool value;
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	int ret = -1;
+	int err;
 
 	if (kstrtobool(buffer, &value) < 0)
 		return -EINVAL;
 
-	u8 set_payload[21] = { 0 };
+	err = battery_saver_acpi_set(galaxybook, value);
+	if (err)
+		return err;
 
-	set_payload[0] = 0x43;
-	set_payload[1] = 0x58;
-	set_payload[2] = 0x7a;
-
-	set_payload[5] = 0x82;
-	set_payload[6] = 0xe9;
-	set_payload[7] = 0x90;
-
-	/* Payload value should be 0x50 (80%) to turn on, and 0x00 to turn off, to match latest driver
-	 * from Windows, and so that the Windows Samsung Settings app works correctly with this value.
-	 */
-	set_payload[8] = value ? 0x50 : 0x00;
-	/* It is actually possible to set other values (so take the input as an integer), but a
-	 * decision would need to be made if this makes sense or not (especially that it will break
-	 * compatibilty with Samsung Settings when booting into Windows). Also, a reasonable range would
-	 * need to be decided (e.g. only allow anything between 60 and 95%?). */
-
-	status = exec_setting_acpi(galaxybook, "setting battery_saver", set_payload,
-			sizeof(set_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	if (response_obj->buffer.length < 9) {
-		pr_err("failed to get response from setting battery_saver with ACPI method %s; " \
-				"response from device was too short\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		ret = -EIO;
-		goto out_free;
-	}
-
-	if (debug) {
-		pr_warn("[DEBUG] returned battery_saver value was: 0x%02x " \
-				"(calculated battery_saver on/off as %d)\n",
-				response_obj->buffer.pointer[8],
-				(response_obj->buffer.pointer[8] == 0x50 ? 1 : 0));
-	}
-
-	/* "set" should reply with:
-	 * {0x43, 0x58, 0x7a, 0x00, 0xaa, 0x00, 0x00, 0x90,
-	 *  (value ? 0x50 : 0x00), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00}
-	 * Should we read response buffer and check this before continuing?
-	 * Or at least that pos 5 is not 0xff? */
-
-	pr_info("turned battery_saver %s\n", value ? "on (1)" : "off (0)");
-	ret = count;
-	goto out_free;
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return ret;
+	return count;
 }
 
 static ssize_t battery_saver_show(struct device *dev, struct device_attribute *attr, char *buffer)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	u8 response_value;
-	int ret = -1;
+	bool value;
+	int err;
 
-	u8 read_payload[21] = { 0 };
+	err = battery_saver_acpi_get(galaxybook, &value);
+	if (err)
+		return err;
 
-	read_payload[0] = 0x43;
-	read_payload[1] = 0x58;
-	read_payload[2] = 0x7a;
-
-	read_payload[5] = 0x82;
-	read_payload[6] = 0xe9;
-	read_payload[7] = 0x91;
-
-	status = exec_setting_acpi(galaxybook, "getting battery_saver", read_payload,
-			sizeof(read_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	if (response_obj->buffer.length < 8) {
-		pr_err("failed to get battery_saver with ACPI method %s; " \
-				"response from device was too short\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS);
-		ret = -EIO;
-		goto out_free;
-	}
-
-	response_value = response_obj->buffer.pointer[7];
-	if (response_value == 0x00) {
-		ret = sysfs_emit(buffer, "%u\n", 0);
-		goto out_free;
-	}
-	else if (response_value == 0x50) {
-		ret = sysfs_emit(buffer, "%u\n", 1);
-		goto out_free;
-	}
-	else {
-		pr_err("failed to get battery_saver with ACPI method %s; " \
-				"unexpected value 0x%02x was reported from the device\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS,
-				response_value);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		ret = -ERANGE;
-		goto out_free;
-	}
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return ret;
+	return sysfs_emit(buffer, "%u\n", value);
 }
 
 static DEVICE_ATTR_RW(battery_saver);
@@ -541,127 +556,94 @@ static ssize_t dolby_atmos_show(struct device *dev, struct device_attribute *att
 static DEVICE_ATTR_RW(dolby_atmos);
 */
 
+
 /* Start on lid open (device should power on when lid is opened) */
+
+
+static int start_on_lid_open_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_POWER_MANAGEMENT;
+	buf.gunm = GUNM_SET;
+	buf.guds[0] = 0xa3;
+	buf.guds[1] = 0x80;
+	buf.guds[2] = value;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"setting start_on_lid_open", &buf);
+	if (err)
+		return err;
+
+	if (buf.guds[1] != 0x80 && buf.guds[2] != value) {
+		pr_err("invalid response when setting start_on_lid_open; " \
+				"returned value was: 0x%02x 0x%02x\n",
+				buf.guds[1], buf.guds[2]);
+		return -EINVAL;
+	}
+
+	pr_info("turned start_on_lid_open %s\n", value ? "on (1)" : "off (0)");
+
+	return 0;
+}
+
+static int start_on_lid_open_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_POWER_MANAGEMENT;
+	buf.gunm = 0x82;
+	buf.guds[0] = 0xa3;
+	buf.guds[1] = 0x81;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"getting start_on_lid_open", &buf);
+	if (err)
+		return err;
+
+	*value = buf.guds[1];
+
+	if (debug) {
+		pr_warn("[DEBUG] start_on_lid_open is currently %s\n",
+				(buf.guds[1] ? "on (1)" : "off (0)"));
+	}
+
+	return 0;
+}
 
 static ssize_t start_on_lid_open_store(struct device *dev, struct device_attribute *attr,
 				const char *buffer, size_t count)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
 	bool value;
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	int ret = -1;
+	int err;
 
 	if (kstrtobool(buffer, &value) < 0)
 		return -EINVAL;
 
-	u8 set_payload[21] = { 0 };
+	err = start_on_lid_open_acpi_set(galaxybook, value);
+	if (err)
+		return err;
 
-	set_payload[0] = 0x43;
-	set_payload[1] = 0x58;
-	set_payload[2] = 0x7a;
-
-	set_payload[5] = 0x82;
-	set_payload[6] = 0xa3;
-	set_payload[7] = 0x80;
-
-	set_payload[8] = value;
-
-	status = exec_setting_acpi(galaxybook, "setting start_on_lid_open", set_payload,
-			sizeof(set_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	if (response_obj->buffer.length < 9) {
-		pr_err("failed to get response from setting start_on_lid_open with ACPI method %s; " \
-				"response from device was too short\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		ret = -EIO;
-		goto out_free;
-	}
-
-	if (debug) {
-		pr_warn("[DEBUG] returned start_on_lid_open value was: 0x%02x " \
-				"(calculated start_on_lid_open on/off as %d)\n",
-				response_obj->buffer.pointer[8],
-				response_obj->buffer.pointer[8]);
-	}
-
-	/* "set" should reply with:
-	 * {0x43, 0x58, 0x7a, 0x00, 0xaa, 0x00, 0x00, 0x80,
-	 *  value, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read response buffer and check this before continuing? */
-
-	pr_info("turned start_on_lid_open %s\n", value ? "on (1)" : "off (0)");
-	ret = count;
-	goto out_free;
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return ret;
+	return count;
 }
 
 static ssize_t start_on_lid_open_show(struct device *dev, struct device_attribute *attr,
 				char *buffer)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	u8 response_value;
-	int ret = -1;
+	bool value;
+	int err;
+	
+	err = start_on_lid_open_acpi_get(galaxybook, &value);
+	if (err)
+		return err;
 
-	u8 read_payload[21] = { 0 };
-
-	read_payload[0] = 0x43;
-	read_payload[1] = 0x58;
-	read_payload[2] = 0x7a;
-
-	read_payload[5] = 0x82;
-	read_payload[6] = 0xa3;
-	read_payload[7] = 0x81;
-
-	status = exec_setting_acpi(galaxybook, "getting start_on_lid_open", read_payload,
-			sizeof(read_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	if (response_obj->buffer.length < 8) {
-		pr_err("failed to get start_on_lid_open with ACPI method %s; " \
-				"response from device was too short\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		ret = -EIO;
-		goto out_free;
-	}
-
-	response_value = response_obj->buffer.pointer[7];
-	if (response_value == 0x00) {
-		ret = sysfs_emit(buffer, "%u\n", 0);
-		goto out_free;
-	}
-	else if (response_value == 0x01) {
-		ret = sysfs_emit(buffer, "%u\n", 1);
-		goto out_free;
-	}
-	else {
-		pr_err("failed to get start_on_lid_open with ACPI method %s; " \
-				"unexpected value 0x%02x was reported from the device\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS,
-				response_value);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		ret = -ERANGE;
-		goto out_free;
-	}
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return ret;
+	return sysfs_emit(buffer, "%u\n", value);
 }
 
 static DEVICE_ATTR_RW(start_on_lid_open);
@@ -669,104 +651,173 @@ static DEVICE_ATTR_RW(start_on_lid_open);
 
 /* USB Charging (USB ports can charge other devices even when device is powered off) */
 
+static int usb_charging_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_USB_CHARGING_SET;
+
+	/* gunm value should be 0x81 to turn on and 0x80 to turn off */
+	buf.gunm = value ? 0x81 : 0x80;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"setting usb_charging", &buf);
+	if (err)
+		return err;
+
+	if (buf.gunm != value) {
+		pr_err("invalid response when setting usb_charging; returned value was: 0x%02x\n",
+				buf.gunm);
+		return -EINVAL;
+	}
+
+	pr_info("turned usb_charging %s\n", value ? "on (1)" : "off (0)");
+
+	return 0;
+}
+
+static int usb_charging_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_USB_CHARGING_GET;
+	buf.gunm = 0x80;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"getting usb_charging", &buf);
+	if (err)
+		return err;
+
+	*value = buf.gunm;
+
+	if (debug) {
+		pr_warn("[DEBUG] usb_charging is currently %s\n",
+				(buf.gunm ? "on (1)" : "off (0)"));
+	}
+
+	return 0;
+}
+
 static ssize_t usb_charging_store(struct device *dev, struct device_attribute *attr,
 				const char *buffer, size_t count)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
 	bool value;
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	int ret = -1;
+	int err;
 
 	if (kstrtobool(buffer, &value) < 0)
 		return -EINVAL;
 
-	u8 set_payload[21] = { 0 };
+	err = usb_charging_acpi_set(galaxybook, value);
+	if (err)
+		return err;
 
-	set_payload[0] = 0x43;
-	set_payload[1] = 0x58;
-	set_payload[2] = 0x68;
-
-	/* payload value should be 0x81 to turn on and 0x80 to turn off */
-	set_payload[5] = value ? 0x81 : 0x80;
-
-	status = exec_setting_acpi(galaxybook, "setting usb_charging", set_payload,
-			sizeof(set_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	if (debug) {
-		pr_warn("[DEBUG] returned usb_charging value was: 0x%02x " \
-				"(calculated usb_charging on/off as %d)\n",
-				response_obj->buffer.pointer[5],
-				response_obj->buffer.pointer[5]);
-	}
-
-	/* "set" should reply with:
-	 * {0x43, 0x58, 0x68, 0x00, 0xaa, value, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read response buffer and check this before continuing? */
-
-	pr_info("turned usb_charging %s\n", value ? "on (1)" : "off (0)");
-	ret = count;
-	goto out_free;
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return ret;
+	return count;
 }
 
 static ssize_t usb_charging_show(struct device *dev, struct device_attribute *attr, char *buffer)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *response_obj = NULL;
-	u8 response_value;
-	int ret = -1;
+	bool value;
+	int err;
 
-	u8 read_payload[21] = { 0 };
+	err = usb_charging_acpi_get(galaxybook, &value);
+	if (err)
+		return err;
 
-	read_payload[0] = 0x43;
-	read_payload[1] = 0x58;
-	read_payload[2] = 0x67;
-
-	read_payload[5] = 0x80;
-
-	status = exec_setting_acpi(galaxybook, "getting usb_charging", read_payload,
-			sizeof(read_payload), &response);
-	if (!ACPI_SUCCESS(status))
-		goto out_free;
-
-	response_obj = response.pointer;
-	response_value = response_obj->buffer.pointer[5];
-	if (response_value == 0x00) {
-		ret = sysfs_emit(buffer, "%u\n", 0);
-		goto out_free;
-	}
-	else if (response_value == 0x01) {
-		ret = sysfs_emit(buffer, "%u\n", 1);
-		goto out_free;
-	}
-	else {
-		pr_err("failed to get usb_charging with ACPI method %s; " \
-				"unexpected value 0x%02x was reported from the device\n",
-				GALAXYBOOK_ACPI_METHOD_SETTINGS,
-				response_value);
-		debug_print_acpi_object_buffer(KERN_ERR, "response was:", response_obj);
-		ret = -ERANGE;
-		goto out_free;
-	}
-
-out_free:
-	ACPI_FREE(response.pointer);
-	return ret;
+	return sysfs_emit(buffer, "%u\n", value);
 }
 
 static DEVICE_ATTR_RW(usb_charging);
+
+
+/* Allow recording (allows or blocks access to camera and microphone) */
+
+static int allow_recording_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_ALLOW_RECORDING;
+	buf.gunm = GUNM_SET;
+	buf.guds[0] = value;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"setting allow_recording", &buf);
+	if (err)
+		return err;
+
+	if (buf.gunm != value) {
+		pr_err("invalid response when setting allow_recording; returned value was: 0x%02x\n",
+				buf.gunm);
+		return -EINVAL;
+	}
+
+	pr_info("turned allow_recording %s\n", value ? "on (1)" : "off (0)");
+
+	return 0;
+}
+
+static int allow_recording_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_ALLOW_RECORDING;
+	buf.gunm = GUNM_GET;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"getting allow_recording", &buf);
+	if (err)
+		return err;
+
+	*value = buf.gunm;
+
+	if (debug) {
+		pr_warn("[DEBUG] allow_recording is currently %s\n",
+				(buf.gunm ? "on (1)" : "off (0)"));
+	}
+
+	return 0;
+}
+
+static ssize_t allow_recording_store(struct device *dev, struct device_attribute *attr,
+				const char *buffer, size_t count)
+{
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
+	bool value;
+	int err;
+
+	if (kstrtobool(buffer, &value) < 0)
+		return -EINVAL;
+
+	err = allow_recording_acpi_set(galaxybook, value);
+	if (err)
+		return err;
+
+	return count;
+}
+
+static ssize_t allow_recording_show(struct device *dev, struct device_attribute *attr, char *buffer)
+{
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
+	bool value;
+	int err;
+
+	err = allow_recording_acpi_get(galaxybook, &value);
+	if (err)
+		return err;
+
+	return sysfs_emit(buffer, "%u\n", value);
+}
+
+static DEVICE_ATTR_RW(allow_recording);
 
 
 /* Add attributes to necessary groups etc */
@@ -776,6 +827,7 @@ static struct attribute *galaxybook_attrs[] = {
 	/* &dev_attr_dolby_atmos.attr, */ /* removed pending further investigation */
 	&dev_attr_start_on_lid_open.attr,
 	&dev_attr_usb_charging.attr,
+	&dev_attr_allow_recording.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(galaxybook);
@@ -793,7 +845,7 @@ static int fan_speed_get(struct samsung_galaxybook *galaxybook, unsigned int *sp
 	int ret = 0;
 	int speed_level = -1;
 
-	status = acpi_evaluate_object(NULL, GALAXYBOOK_ACPI_FAN_SPEED_VALUE, NULL, &response);
+	status = acpi_evaluate_object(NULL, ACPI_FAN_SPEED_VALUE, NULL, &response);
 	if (ACPI_FAILURE(status)) {
 		pr_err("Get fan state failed\n");
 		return -ENODEV;
@@ -812,6 +864,9 @@ static int fan_speed_get(struct samsung_galaxybook *galaxybook, unsigned int *sp
 	speed_level = (int) response_obj->integer.value;
 	*speed = galaxybook->fan_speeds[speed_level];
 
+	if (debug)
+		pr_warn("[DEBUG] reporting fan_speed of %d (level %d)\n", *speed, speed_level);
+
 out_free:
 	ACPI_FREE(response.pointer);
 	return ret;
@@ -823,7 +878,7 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 	union acpi_object *response_obj = NULL;
 	acpi_status status;
 
-	status = acpi_evaluate_object(NULL, GALAXYBOOK_ACPI_FAN_SPEED_LIST, NULL, &response);
+	status = acpi_evaluate_object(NULL, ACPI_FAN_SPEED_LIST, NULL, &response);
 	if (ACPI_FAILURE(status)) {
 		pr_err("Failed to read fan speed list\n");
 		return -ENODEV;
@@ -847,6 +902,8 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 
 	galaxybook->fan_speeds = kzalloc(sizeof(unsigned int) * (response_obj->package.count + 2),
 			GFP_KERNEL);
+	if (!galaxybook->fan_speeds)
+		return -ENOMEM;
 
 	/* hard-coded "off" value (0) */
 	galaxybook->fan_speeds[0] = 0;
@@ -870,6 +927,12 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 	if (galaxybook->fan_speeds_count > 1) {
 		galaxybook->fan_speeds[i] = galaxybook->fan_speeds[i-1] + 1000;
 		galaxybook->fan_speeds_count++;
+	}
+
+	if (debug) {
+		pr_warn("[DEBUG] initialized fan speed reporting with the following levels:\n");
+		for (i = 0; i < galaxybook->fan_speeds_count; i++)
+			pr_warn("[DEBUG] level %d = %d\n", i, galaxybook->fan_speeds[i]);
 	}
 
 out_free:
@@ -903,8 +966,7 @@ static int __init galaxybook_fan_speed_init(struct samsung_galaxybook *galaxyboo
 {
 	int err;
 
-	galaxybook->fan = *acpi_dev_get_first_match_dev(
-		GALAXYBOOK_ACPI_FAN_DEVICE_ID, NULL, -1);
+	galaxybook->fan = *acpi_dev_get_first_match_dev(ACPI_FAN_DEVICE_ID, NULL, -1);
 
 	err = sysfs_create_file(&galaxybook->fan.dev.kobj, &dev_attr_fan_speed_rpm.attr);
 	if (err)
@@ -994,20 +1056,21 @@ static int galaxybook_hwmon_init(struct samsung_galaxybook *galaxybook)
  */
 
 typedef enum {
-	PERFORMANCE_MODE_SILENT = 0x0b,
-	PERFORMANCE_MODE_QUIET = 0x0a,
-	PERFORMANCE_MODE_OPTIMIZED = 0x02,
-	PERFORMANCE_MODE_HIGH_PERFORMANCE = 0x15,
+	PERFORMANCE_MODE_OPTIMIZED,
+	PERFORMANCE_MODE_QUIET,
+	PERFORMANCE_MODE_SILENT,
+	PERFORMANCE_MODE_PERFORMANCE,
 } galaxybook_performance_mode;
 
-static const char * const galaxybook_performance_mode_names[] = {
-	[PERFORMANCE_MODE_SILENT] = "silent",
-	[PERFORMANCE_MODE_QUIET] = "quiet",
+static const char * const performance_mode_names[] = {
 	[PERFORMANCE_MODE_OPTIMIZED] = "optimized",
-	[PERFORMANCE_MODE_HIGH_PERFORMANCE] = "high-performance",
+	[PERFORMANCE_MODE_QUIET] = "quiet",
+	[PERFORMANCE_MODE_SILENT] = "silent",
+	[PERFORMANCE_MODE_PERFORMANCE] = "performance",
 };
 
-static galaxybook_performance_mode profile_performance_mode(enum platform_profile_option profile)
+static galaxybook_performance_mode profile_to_performance_mode(
+				const enum platform_profile_option profile)
 {
 	/* Map all the profiles even though we will mark only some of them as supported */
 	switch (profile) {
@@ -1017,7 +1080,7 @@ static galaxybook_performance_mode profile_performance_mode(enum platform_profil
 	case PLATFORM_PROFILE_QUIET:
 		return PERFORMANCE_MODE_QUIET;
 	case PLATFORM_PROFILE_PERFORMANCE:
-		return PERFORMANCE_MODE_HIGH_PERFORMANCE;
+		return PERFORMANCE_MODE_PERFORMANCE;
 	case PLATFORM_PROFILE_BALANCED:
 	case PLATFORM_PROFILE_BALANCED_PERFORMANCE:
 	default:
@@ -1025,68 +1088,107 @@ static galaxybook_performance_mode profile_performance_mode(enum platform_profil
 	}
 }
 
-static int platform_profile_set(struct platform_profile_handler *pprof,
+static enum platform_profile_option performance_mode_to_profile(
+				const galaxybook_performance_mode mode)
+{
+	switch (mode) {
+	case PERFORMANCE_MODE_SILENT:
+		return PLATFORM_PROFILE_LOW_POWER;
+	case PERFORMANCE_MODE_QUIET:
+		return PLATFORM_PROFILE_QUIET;
+	case PERFORMANCE_MODE_PERFORMANCE:
+		return PLATFORM_PROFILE_PERFORMANCE;
+	default:
+		return PLATFORM_PROFILE_BALANCED;
+	}
+}
+
+static galaxybook_performance_mode performance_mode_lookup_by_value(
+				struct samsung_galaxybook *galaxybook, const u8 value)
+{
+	int i;
+	for (i = 0; i < galaxybook->performance_modes_count; i++)
+		if (galaxybook->performance_mode_values[i] == value)
+			return i;
+	return -1;
+}
+
+static int performance_mode_acpi_set(struct samsung_galaxybook *galaxybook,
+				const galaxybook_performance_mode performance_mode)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = 0x91;
+	export_guid(buf.caid, &PERFORMANCE_MODE_GUID);
+	buf.fncn = 0x51;
+	buf.subn = 0x03;
+	buf.iob0 = galaxybook->performance_mode_values[performance_mode];
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &buf,
+			SAWB_LEN_PERFORMANCE_MODE, "setting performance_mode", &buf);
+	if (err)
+		return err;
+
+	pr_info("set performance_mode to '%s' (0x%02x)\n", performance_mode_names[performance_mode],
+			galaxybook->performance_mode_values[performance_mode]);
+
+	return 0;
+}
+
+static int performance_mode_acpi_get(struct samsung_galaxybook *galaxybook,
+				galaxybook_performance_mode *performance_mode)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = 0x91;
+	export_guid(buf.caid, &PERFORMANCE_MODE_GUID);
+	buf.fncn = 0x51;
+	buf.subn = 0x02;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &buf,
+			SAWB_LEN_PERFORMANCE_MODE, "getting performance_mode", &buf);
+	if (err)
+		return err;
+
+	*performance_mode = performance_mode_lookup_by_value(galaxybook, buf.iob0);
+	if (*performance_mode == -1)
+		return -EINVAL;
+
+	if (debug)
+		pr_warn("[DEBUG] performance_mode is currently '%s' (0x%02x)\n",
+			performance_mode_names[*performance_mode], buf.iob0);
+
+	return 0;
+}
+
+static int galaxybook_platform_profile_set(struct platform_profile_handler *pprof,
 				enum platform_profile_option profile)
 {
 	struct samsung_galaxybook *galaxybook = container_of(pprof,
 			struct samsung_galaxybook, profile_handler);
-	acpi_status status;
-	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
+	galaxybook_performance_mode performance_mode = profile_to_performance_mode(profile);
 
-	galaxybook_performance_mode performance_mode = profile_performance_mode(profile);
-
-	u8 set_payload[256] = { 0 };
-
-	set_payload[0] = 0x43;
-	set_payload[1] = 0x58;
-	set_payload[2] = 0x91;
-
-	set_payload[5] = 0x8d;
-	set_payload[6] = 0x02;
-	set_payload[7] = 0x46;
-	set_payload[8] = 0x82;
-	set_payload[9] = 0xca;
-	set_payload[10] = 0x8b;
-	set_payload[11] = 0x55;
-	set_payload[12] = 0x4a;
-	set_payload[13] = 0xba;
-	set_payload[14] = 0x0f;
-	set_payload[15] = 0x6f;
-	set_payload[16] = 0x1e;
-	set_payload[17] = 0x6b;
-	set_payload[18] = 0x92;
-	set_payload[19] = 0x1b;
-	set_payload[20] = 0x8f;
-	set_payload[21] = 0x51;
-	set_payload[22] = 0x03;
-
-	set_payload[23] = performance_mode;
-
-	status = exec_performance_mode_acpi(galaxybook, "setting performance_mode", set_payload,
-			sizeof(set_payload), &response);
-	ACPI_FREE(response.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* "set" should always reply with:
-	 * {0x43, 0x58, 0x91, 0x00, 0xaa, 0x8d, 0x02, 0x46,
-	 *  0x82, 0xca, 0x8b, 0x55, 0x4a, 0xba, 0x0f, 0x6f,
-	 *  0x1e, 0x6b, 0x92, 0x1b, 0x8f, 0x51, 0x03, 0x00, ... }
-	 * Should we read response buffer and check this before continuing? */
-
-	pr_info("set performance_mode to '%s'\n",
-			galaxybook_performance_mode_names[performance_mode]);
-	galaxybook->current_profile = profile;
-
-	return status;
+	return performance_mode_acpi_set(galaxybook, performance_mode);
 }
 
-static int platform_profile_get(struct platform_profile_handler *pprof,
+static int galaxybook_platform_profile_get(struct platform_profile_handler *pprof,
 				enum platform_profile_option *profile)
 {
 	struct samsung_galaxybook *galaxybook = container_of(pprof,
 			struct samsung_galaxybook, profile_handler);
-	*profile = galaxybook->current_profile;
+	galaxybook_performance_mode performance_mode;
+	int err;
+
+	err = performance_mode_acpi_get(galaxybook, &performance_mode);
+	if (err)
+		return err;
+
+	*profile = performance_mode_to_profile(performance_mode);
+
 	return 0;
 }
 
@@ -1094,8 +1196,8 @@ static int galaxybook_profile_init(struct samsung_galaxybook *galaxybook)
 {
 	int err;
 
-	galaxybook->profile_handler.profile_get = platform_profile_get;
-	galaxybook->profile_handler.profile_set = platform_profile_set;
+	galaxybook->profile_handler.profile_get = galaxybook_platform_profile_get;
+	galaxybook->profile_handler.profile_set = galaxybook_platform_profile_set;
 
 	set_bit(PLATFORM_PROFILE_LOW_POWER, galaxybook->profile_handler.choices);
 	set_bit(PLATFORM_PROFILE_QUIET, galaxybook->profile_handler.choices);
@@ -1114,9 +1216,110 @@ static void galaxybook_profile_exit(struct samsung_galaxybook *galaxybook)
 	platform_profile_remove();
 }
 
+static int galaxybook_performance_mode_init(struct samsung_galaxybook *galaxybook)
+{
+	struct sawb perf_modes_buf = {0};
+	struct sawb perf_mode_values_buf = {0};
+	int err;
+
+	perf_modes_buf.safn = SAFN;
+	perf_modes_buf.sasb = 0x91;
+	export_guid(perf_modes_buf.caid, &PERFORMANCE_MODE_GUID);
+	perf_modes_buf.fncn = 0x51;
+	perf_modes_buf.subn = 0x00;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &perf_modes_buf,
+			SAWB_LEN_PERFORMANCE_MODE, "get supported performance modes", &perf_modes_buf);
+	if (err)
+		return err;
+
+	perf_mode_values_buf.safn = SAFN;
+	perf_mode_values_buf.sasb = 0x91;
+	export_guid(perf_mode_values_buf.caid, &PERFORMANCE_MODE_GUID);
+	perf_mode_values_buf.fncn = 0x51;
+	perf_mode_values_buf.subn = 0x01;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &perf_mode_values_buf,
+			SAWB_LEN_PERFORMANCE_MODE, "get performance mode values", &perf_mode_values_buf);
+	if (err)
+		return err;
+
+	/* set count of performance modes */
+	galaxybook->performance_modes_count = 0;
+
+	/* PERFORMANCE_MODE_OPTIMIZED */
+	if (perf_modes_buf.iob0)
+		galaxybook->performance_modes_count++;
+	/* PERFORMANCE_MODE_QUIET */
+	if (perf_modes_buf.iob1)
+		galaxybook->performance_modes_count++;
+	/* PERFORMANCE_MODE_SILENT */
+	if (perf_modes_buf.iob2)
+		galaxybook->performance_modes_count++;
+	/* PERFORMANCE_MODE_PERFORMANCE */
+	if (perf_modes_buf.iob3)
+		galaxybook->performance_modes_count++;
+
+	/* now allocate performance_mode_values array based on count and set all of its values */
+
+	galaxybook->performance_mode_values = kzalloc(sizeof(u8) * galaxybook->performance_modes_count,
+			GFP_KERNEL);
+	if (!galaxybook->performance_mode_values)
+		return -ENOMEM;
+
+	/* PERFORMANCE_MODE_OPTIMIZED */
+	if (perf_modes_buf.iob0) {
+		galaxybook->performance_mode_values[PERFORMANCE_MODE_OPTIMIZED] =
+				perf_mode_values_buf.iob3;
+		if (debug)
+			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
+					performance_mode_names[PERFORMANCE_MODE_OPTIMIZED],
+					galaxybook->performance_mode_values[PERFORMANCE_MODE_OPTIMIZED]);
+	}
+	/* PERFORMANCE_MODE_QUIET */
+	if (perf_modes_buf.iob1) {
+		galaxybook->performance_mode_values[PERFORMANCE_MODE_QUIET] =
+				perf_mode_values_buf.iob4;
+		if (debug)
+			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
+					performance_mode_names[PERFORMANCE_MODE_QUIET],
+					galaxybook->performance_mode_values[PERFORMANCE_MODE_QUIET]);
+	}
+	/* PERFORMANCE_MODE_SILENT */
+	if (perf_modes_buf.iob2) {
+		galaxybook->performance_mode_values[PERFORMANCE_MODE_SILENT] =
+				perf_mode_values_buf.iob5;
+		if (debug)
+			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
+					performance_mode_names[PERFORMANCE_MODE_SILENT],
+					galaxybook->performance_mode_values[PERFORMANCE_MODE_SILENT]);
+	}
+	/* PERFORMANCE_MODE_PERFORMANCE */
+	if (perf_modes_buf.iob3) {
+		galaxybook->performance_mode_values[PERFORMANCE_MODE_PERFORMANCE] =
+				perf_mode_values_buf.iob7;
+		if (debug)
+			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
+					performance_mode_names[PERFORMANCE_MODE_PERFORMANCE],
+					galaxybook->performance_mode_values[PERFORMANCE_MODE_PERFORMANCE]);
+	}
+
+	/* now check currently set performance_mode; if it is not supported then set default profile */
+	galaxybook_performance_mode current_performance_mode;
+	err = performance_mode_acpi_get(galaxybook, &current_performance_mode);
+	if (err) {
+		pr_info("initial performance_mode value is not supported by device; setting to default\n");
+		err = galaxybook_platform_profile_set(&galaxybook->profile_handler,
+				DEFAULT_PLATFORM_PROFILE);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
 
 /*
- * Platform
+ * Platform device
  */
 
 static int galaxybook_platform_probe(struct platform_device *pdev)
@@ -1206,10 +1409,11 @@ static void galaxybook_performance_mode_hotkey_work(struct work_struct *work)
 {
 	struct samsung_galaxybook *galaxybook = container_of(work,
 			struct samsung_galaxybook, performance_mode_hotkey_work);
+	enum platform_profile_option current_profile;
 
-	platform_profile_set(&galaxybook->profile_handler,
-			performance_mode_hotkey_next_profile[galaxybook->current_profile]);
-
+	galaxybook_platform_profile_get(&galaxybook->profile_handler, &current_profile);
+	galaxybook_platform_profile_set(&galaxybook->profile_handler,
+			performance_mode_hotkey_next_profile[current_profile]);
 	platform_profile_notify();
 
 	return;
@@ -1221,13 +1425,24 @@ static void galaxybook_kbd_backlight_hotkey_work(struct work_struct *work)
 			struct samsung_galaxybook, kbd_backlight_hotkey_work);
 
 	if (galaxybook->kbd_backlight.brightness < galaxybook->kbd_backlight.max_brightness)
-		galaxybook_kbd_backlight_set(&galaxybook->kbd_backlight,
-				galaxybook->kbd_backlight.brightness + 1);
+		kbd_backlight_acpi_set(galaxybook, galaxybook->kbd_backlight.brightness + 1);
 	else
-		galaxybook_kbd_backlight_set(&galaxybook->kbd_backlight, 0);
+		kbd_backlight_acpi_set(galaxybook, 0);
 
 	led_classdev_notify_brightness_hw_changed(&galaxybook->kbd_backlight,
 			galaxybook->kbd_backlight.brightness);
+
+	return;
+}
+
+static void galaxybook_allow_recording_hotkey_work(struct work_struct *work)
+{
+	struct samsung_galaxybook *galaxybook = container_of(work,
+			struct samsung_galaxybook, allow_recording_hotkey_work);
+	bool value;
+
+	allow_recording_acpi_get(galaxybook, &value);
+	allow_recording_acpi_set(galaxybook, !value);
 
 	return;
 }
@@ -1255,6 +1470,20 @@ static bool galaxybook_i8042_filter(unsigned char data, unsigned char str,
 			}
 			schedule_work(&galaxybook_ptr->kbd_backlight_hotkey_work);
 		}
+
+		/* allow_recording keydown */
+		if (data == 0x1f) {
+			if (debug) {
+				pr_warn("[DEBUG] hotkey: allow_recording keydown\n");
+			}
+		}
+		/* allow_recording keyup */
+		if (data == 0x9f) {
+			if (debug) {
+				pr_warn("[DEBUG] hotkey: allow_recording keyup\n");
+			}
+			schedule_work(&galaxybook_ptr->allow_recording_hotkey_work);
+		}
 	}
 
 	return false;
@@ -1273,7 +1502,7 @@ static void galaxybook_input_notify(struct samsung_galaxybook *galaxybook, int e
 		pr_warn("[DEBUG] input notification event: 0x%x\n", event);
 	}
 	if (!sparse_keymap_report_event(galaxybook->input, event, 1, true)) {
-		pr_warn("Unknown input notification event: 0x%x\n", event);
+		pr_warn("unknown input notification event: 0x%x\n", event);
 		pr_warn("Please create an issue with this information at " \
 				"https://github.com/joshuagrisham/samsung-galaxybook-extras/issues\n");
 	}
@@ -1373,7 +1602,7 @@ static int galaxybook_wmi_exit(void)
 
 
 /*
- * ACPI
+ * ACPI device
  */
 
 static void galaxybook_acpi_notify(struct acpi_device *device, u32 event)
@@ -1383,239 +1612,56 @@ static void galaxybook_acpi_notify(struct acpi_device *device, u32 event)
 	if (!acpi_hotkeys)
 		return;
 
-	if (event == GALAXYBOOK_ACPI_HOTKEY_PERFORMANCE_MODE)
+	if (event == ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE)
 		schedule_work(&galaxybook_ptr->performance_mode_hotkey_work);
 
 	galaxybook_input_notify(galaxybook, event);
 }
 
-static int galaxybook_acpi_enable_notify(struct samsung_galaxybook *galaxybook)
+static int galaxybook_enable_acpi_notify(struct samsung_galaxybook *galaxybook)
 {
-	union acpi_object in_obj;
-	struct acpi_object_list params;
-	struct acpi_buffer response1 = { ACPI_ALLOCATE_BUFFER, NULL };
-	struct acpi_buffer response2 = { ACPI_ALLOCATE_BUFFER, NULL };
-	acpi_status status;
+	struct sawb buf = {0};
+	int err;
 
-	u8 init_payload[21] = { 0 };
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_NOTIFICATIONS);
+	if (err)
+		return err;
 
+	buf.safn = SAFN;
+	buf.sasb = SASB_NOTIFICATIONS;
+	buf.gunm = 0x80;
+	buf.guds[0] = 0x02;
 
-	/* step 1 - execute GALAXYBOOK_ACPI_METHOD_SETTINGS with init payload */
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"activate ACPI notifications", &buf);
+	if (err)
+		return err;
 
-	init_payload[0] = 0x43;
-	init_payload[1] = 0x58;
-	init_payload[2] = 0x86;
-
-	/* init 0x86 device controls */
-
-	init_payload[5] = 0xbb;
-	init_payload[6] = 0xaa;
-
-	status = exec_setting_acpi(galaxybook,
-			"step 1 to enable ACPI notifications (initializing 0x86 controls)",
-			init_payload, sizeof(init_payload), &response1);
-	ACPI_FREE(response1.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* a successful "init" should always reply with:
-	 * {0x43, 0x58, 0x86, 0x00, 0xaa, 0xdd, 0xcc, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read response buffer and check this before continuing? */
-
-
-	/* step 2 - execute GALAXYBOOK_ACPI_METHOD_SETTINGS with enable payload */
-
-	init_payload[5] = 0x80;
-	init_payload[6] = 0x02;
-
-	status = exec_setting_acpi(galaxybook, "step 2 to enable ACPI notifications (enable)",
-			init_payload, sizeof(init_payload), &response2);
-	ACPI_FREE(response2.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* "enable" should reply with:
-	 * {0x43, 0x58, 0x86, 0x00, 0xaa, 0x02, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read response buffer and check this before continuing? */
-
-
-	/* step 3 - execute GALAXYBOOK_ACPI_METHOD_ENABLE_NOTIFY with integer value of 1 */
-
-	in_obj.type 			= ACPI_TYPE_INTEGER;
-	in_obj.integer.value	= 1;
-
-	params.count = 1;
-	params.pointer = &in_obj;
-
-	status = acpi_evaluate_object(galaxybook->acpi->handle,
-			GALAXYBOOK_ACPI_METHOD_ENABLE_NOTIFY, &params, NULL);
-
-	/* Should reply with 0x02; should we check this before continuing? */
-
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		pr_err("failed step 3 to enable ACPI notifications with ACPI method %s; got %s\n",
-				GALAXYBOOK_ACPI_METHOD_ENABLE_NOTIFY,
-				acpi_format_exception(status));
-		return -ENXIO;
-	}
-
-	/* all steps should now be complete without failure */
-
-	pr_info("ACPI notifications successfully enabled via ACPI methods %s and %s\n",
-			GALAXYBOOK_ACPI_METHOD_ENABLE_NOTIFY,
-			GALAXYBOOK_ACPI_METHOD_SETTINGS);
-
-	return status;
-}
-
-static int galaxybook_performance_mode_init(struct samsung_galaxybook *galaxybook)
-{
-	acpi_status status;
-	struct acpi_buffer response1 = { ACPI_ALLOCATE_BUFFER, NULL };
-	struct acpi_buffer response2 = { ACPI_ALLOCATE_BUFFER, NULL };
-	struct acpi_buffer response3 = { ACPI_ALLOCATE_BUFFER, NULL };
-
-	u8 init_payload[256] = { 0 };
-
-	/* init 0x91 "performance mode" device controls */
-
-	init_payload[0] = 0x43;
-	init_payload[1] = 0x58;
-	init_payload[2] = 0x91;
-
-	init_payload[5] = 0x8d;
-	init_payload[6] = 0x02;
-	init_payload[7] = 0x46;
-	init_payload[8] = 0x82;
-	init_payload[9] = 0xca;
-	init_payload[10] = 0x8b;
-	init_payload[11] = 0x55;
-	init_payload[12] = 0x4a;
-	init_payload[13] = 0xba;
-	init_payload[14] = 0x0f;
-	init_payload[15] = 0x6f;
-	init_payload[16] = 0x1e;
-	init_payload[17] = 0x6b;
-	init_payload[18] = 0x92;
-	init_payload[19] = 0x1b;
-	init_payload[20] = 0x8f;
-	init_payload[21] = 0x51;
-
-	/* first init with 0x01 */
-	init_payload[22] = 0x01;
-
-	status = exec_performance_mode_acpi(galaxybook, "initializing performance_mode control step 1",
-			init_payload, sizeof(init_payload), &response1);
-	ACPI_FREE(response1.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* first init should reply with:
-	 * {0x43, 0x58, 0x91, 0x00, 0xaa, 0x8d, 0x02, 0x46,
-	 *  0x82, 0xca, 0x8b, 0x55, 0x4a, 0xba, 0x0f, 0x6f,
-	 *  0x1e, 0x6b, 0x92, 0x1b, 0x8f, 0x51, 0x01, 0x07,
-	 *  0x00, 0x01, 0x02, 0x0a, 0x0b, 0x14, 0x15, 0x00, ...}
-	 * Should we read the response buffer and check this before continuing? */
-
-	/* second init with 0x00 */
-	init_payload[22] = 0x00;
-
-	status = exec_performance_mode_acpi(galaxybook, "initializing performance_mode control step 2",
-			init_payload, sizeof(init_payload), &response2);
-	ACPI_FREE(response2.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* second init should reply with:
-	 * {0x43, 0x58, 0x91, 0x00, 0xaa, 0x8d, 0x02, 0x46,
-	 *  0x82, 0xca, 0x8b, 0x55, 0x4a, 0xba, 0x0f, 0x6f,
-	 *  0x1e, 0x6b, 0x92, 0x1b, 0x8f, 0x51, 0x00, 0x01,
-	 *  0x01, 0x01, 0x01, 0x00, ...}
-	 * Should we read the response buffer and check this before continuing? */
-
-	pr_info("performance_mode control successfully initialized via ACPI method %s\n",
-			GALAXYBOOK_ACPI_METHOD_PERFORMANCE_MODE);
-
-	/* Set performance_mode to a default value of 'optimized'.
-	 * Without always ensuring to set a performance mode here, the kbd_backlight has intermittent
-	 * problems. */
-
-	galaxybook->current_profile = GALAXYBOOK_STARTUP_PROFILE;
-	init_payload[22] = 0x03;
-	init_payload[23] = profile_performance_mode(galaxybook->current_profile);
-
-	status = exec_performance_mode_acpi(galaxybook, "setting initial performance_mode",
-			init_payload, sizeof(init_payload), &response3);
-	ACPI_FREE(response3.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	pr_info("performance_mode initialized with startup value of '%s'\n",
-			galaxybook_performance_mode_names[
-					profile_performance_mode(galaxybook->current_profile)]);
-
-	return status;
+	return 0;
 }
 
 static int galaxybook_acpi_init(struct samsung_galaxybook *galaxybook)
 {
-	acpi_status status;
-	struct acpi_buffer response1 = { ACPI_ALLOCATE_BUFFER, NULL };
+	int err;
 
-	u8 init_payload[21] = { 0 };
+	err = acpi_execute_simple_method(galaxybook->acpi->handle, ACPI_METHOD_ENABLE, 1);
+	if (err)
+		return err;
 
-	/* shared init_payload setup
-	 * position 2 seems to point to different device control types
-	 * and each one needs to be initialized with 0xbb 0xaa before use */
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_POWER_MANAGEMENT);
+	if (err)
+		return err;
 
-	init_payload[0] = 0x43;
-	init_payload[1] = 0x58;
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_ALLOW_RECORDING);
+	if (err)
+		return err;
 
-	init_payload[5] = 0xbb;
-	init_payload[6] = 0xaa;
-
-	/* a successful "init" should always reply with:
-	 * {0x43, 0x58, init_payload[2], 0x00, 0xaa, 0xdd, 0xcc, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	 *  0x00, 0x00, 0x00, 0x00, 0x00}
-	 * Should we read the response buffer and check this before continuing? */
-
-	/* init 0x7a device controls */
-	/* (battery saver, start on lid open, dolby atmos, etc) */
-
-	init_payload[2] = 0x7a;
-	status = exec_setting_acpi(galaxybook, "initializing 0x7a controls",
-			init_payload, sizeof(init_payload), &response1);
-	ACPI_FREE(response1.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-
-	/* init 0x8a device controls */
-	/* (unknown what this is for, so will remove it for now...) */
-	/*
-	init_payload[2] = 0x8a;
-	status = exec_setting_acpi(galaxybook, "initializing 0x8a controls",
-			init_payload, sizeof(init_payload), &response2);
-	ACPI_FREE(response2.pointer);
-	if (!ACPI_SUCCESS(status))
-		return status;
-	*/
-
-	pr_info("device controls successfully initialized via ACPI method %s\n",
-			GALAXYBOOK_ACPI_METHOD_SETTINGS);
-
-	return status;
+	return 0;
 }
 
 static void galaxybook_acpi_exit(struct samsung_galaxybook *galaxybook)
 {
-	/* send same payloads as init when exiting in order to properly shutdown */
-	pr_info("removing ACPI device (will execute init again to shutdown gracefully)\n");
-	galaxybook_acpi_init(galaxybook);
+	acpi_execute_simple_method(galaxybook->acpi->handle, ACPI_METHOD_ENABLE, 0);
 	return;
 }
 
@@ -1655,8 +1701,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		err = galaxybook_profile_init(galaxybook);
 		if (err)
 			goto err_platform_exit;
-	}
-	else {
+	} else {
 		pr_warn("performance_mode is disabled\n");
 	}
 
@@ -1665,8 +1710,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		err = galaxybook_kbd_backlight_init(galaxybook);
 		if (err)
 			goto err_profile_exit;
-	}
-	else {
+	} else {
 		pr_warn("kbd_backlight is disabled\n");
 	}
 
@@ -1674,13 +1718,14 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		/* initialize hotkey work queues */
 		INIT_WORK(&galaxybook->kbd_backlight_hotkey_work,
 				galaxybook_kbd_backlight_hotkey_work);
+		INIT_WORK(&galaxybook->allow_recording_hotkey_work,
+				galaxybook_allow_recording_hotkey_work);
 
 		pr_info("installing i8402 key filter to capture hotkey input\n");
 		err = i8042_install_filter(galaxybook_i8042_filter);
 		if (err)
 			pr_err("Unable to install key filter\n");
-	}
-	else {
+	} else {
 		pr_warn("i8042_filter is disabled\n");
 	}
 
@@ -1696,14 +1741,13 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		if (err)
 			pr_err("Unable to initialize hwmon device\n");
 #endif
-	}
-	else {
+	} else {
 		pr_warn("fan_speed is disabled\n");
 	}
 
 	if (acpi_hotkeys) {
 		pr_info("enabling ACPI notifications\n");
-		err = galaxybook_acpi_enable_notify(galaxybook);
+		err = galaxybook_enable_acpi_notify(galaxybook);
 		if (err)
 			pr_err("Unable to enable ACPI notifications\n");
 
@@ -1717,8 +1761,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		/* initialize hotkey work queues */
 		INIT_WORK(&galaxybook->performance_mode_hotkey_work,
 				galaxybook_performance_mode_hotkey_work);
-	}
-	else {
+	} else {
 		pr_warn("acpi_hotkeys is disabled\n");
 	}
 
@@ -1727,8 +1770,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		err = galaxybook_wmi_init();
 		if (err)
 			pr_err("Unable to enable WMI notifications\n");
-	}
-	else {
+	} else {
 		pr_warn("wmi_hotkeys is disabled\n");
 	}
 
@@ -1763,6 +1805,7 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 	if (i8042_filter) {
 		i8042_remove_filter(galaxybook_i8042_filter);
 		cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
+		cancel_work_sync(&galaxybook->allow_recording_hotkey_work);
 	}
 
 	if (kbd_backlight)
