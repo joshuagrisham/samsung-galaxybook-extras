@@ -99,8 +99,31 @@ MODULE_PARM_DESC(debug, "Enable debug messages (default off)");
 
 
 /*
- * Device matching and definitions
+ * Device definitions, matching, and quirks
  */
+
+#define PERFORMANCE_MODE_COUNT 4
+
+typedef enum {
+	PERFORMANCE_MODE_OPTIMIZED,
+	PERFORMANCE_MODE_QUIET,
+	PERFORMANCE_MODE_SILENT,
+	PERFORMANCE_MODE_PERFORMANCE,
+} galaxybook_performance_mode;
+
+static const char * const performance_mode_names[] = {
+	[PERFORMANCE_MODE_OPTIMIZED] = "optimized",
+	[PERFORMANCE_MODE_QUIET] = "quiet",
+	[PERFORMANCE_MODE_SILENT] = "silent",
+	[PERFORMANCE_MODE_PERFORMANCE] = "performance",
+};
+
+static u8 performance_modes[] = {
+	[PERFORMANCE_MODE_OPTIMIZED] = 0x0,
+	[PERFORMANCE_MODE_QUIET] = 0xa,
+	[PERFORMANCE_MODE_SILENT] = 0xb,
+	[PERFORMANCE_MODE_PERFORMANCE] = 0x1,
+};
 
 struct galaxybook_device_quirks {
 	bool disable_kbd_backlight;
@@ -109,6 +132,7 @@ struct galaxybook_device_quirks {
 	bool disable_i8042_filter;
 	bool disable_acpi_hotkeys;
 	bool disable_wmi_hotkeys;
+	u8 *performance_modes;
 };
 
 static const struct galaxybook_device_quirks sam0427_quirks = {
@@ -117,10 +141,19 @@ static const struct galaxybook_device_quirks sam0427_quirks = {
 	.disable_i8042_filter = true,
 };
 
+static const struct galaxybook_device_quirks sam0429_quirks = {
+	.performance_modes = (u8[]){
+		[PERFORMANCE_MODE_OPTIMIZED] = 0x2,
+		[PERFORMANCE_MODE_QUIET] = 0xa,
+		[PERFORMANCE_MODE_SILENT] = 0xb,
+		[PERFORMANCE_MODE_PERFORMANCE] = 0x15,
+	},
+};
+
 static const struct acpi_device_id galaxybook_device_ids[] = {
 	{ "SAM0427", (unsigned long)&sam0427_quirks },
 	{ "SAM0428" },
-	{ "SAM0429" },
+	{ "SAM0429", (unsigned long)&sam0429_quirks },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, galaxybook_device_ids);
@@ -145,9 +178,6 @@ struct samsung_galaxybook {
 	struct input_dev *input;
 	struct key_entry *keymap;
 
-	u8 *performance_mode_values;
-	int performance_modes_count;
-
 	struct platform_profile_handler profile_handler;
 	struct work_struct performance_mode_hotkey_work;
 
@@ -168,9 +198,9 @@ static struct samsung_galaxybook *galaxybook_ptr;
 #define ACPI_METHOD_PERFORMANCE_MODE "CSXI"
 
 /* guid 8246028d-8bca-4a55-ba0f-6f1e6b921b8f */
-static const guid_t performance_mode_guid =
+static const guid_t performance_mode_guid_value =
 	GUID_INIT(0x8246028d, 0x8bca, 0x4a55, 0xba, 0x0f, 0x6f, 0x1e, 0x6b, 0x92, 0x1b, 0x8f);
-#define PERFORMANCE_MODE_GUID performance_mode_guid
+#define PERFORMANCE_MODE_GUID performance_mode_guid_value
 
 #define DEFAULT_PLATFORM_PROFILE PLATFORM_PROFILE_BALANCED
 
@@ -1055,20 +1085,6 @@ static int galaxybook_hwmon_init(struct samsung_galaxybook *galaxybook)
  * Platform Profile / Performance mode
  */
 
-typedef enum {
-	PERFORMANCE_MODE_OPTIMIZED,
-	PERFORMANCE_MODE_QUIET,
-	PERFORMANCE_MODE_SILENT,
-	PERFORMANCE_MODE_PERFORMANCE,
-} galaxybook_performance_mode;
-
-static const char * const performance_mode_names[] = {
-	[PERFORMANCE_MODE_OPTIMIZED] = "optimized",
-	[PERFORMANCE_MODE_QUIET] = "quiet",
-	[PERFORMANCE_MODE_SILENT] = "silent",
-	[PERFORMANCE_MODE_PERFORMANCE] = "performance",
-};
-
 static galaxybook_performance_mode profile_to_performance_mode(
 				const enum platform_profile_option profile)
 {
@@ -1106,9 +1122,8 @@ static enum platform_profile_option performance_mode_to_profile(
 static galaxybook_performance_mode performance_mode_lookup_by_value(
 				struct samsung_galaxybook *galaxybook, const u8 value)
 {
-	int i;
-	for (i = 0; i < galaxybook->performance_modes_count; i++)
-		if (galaxybook->performance_mode_values[i] == value)
+	for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++)
+		if (performance_modes[i] == value)
 			return i;
 	return -1;
 }
@@ -1124,7 +1139,7 @@ static int performance_mode_acpi_set(struct samsung_galaxybook *galaxybook,
 	export_guid(buf.caid, &PERFORMANCE_MODE_GUID);
 	buf.fncn = 0x51;
 	buf.subn = 0x03;
-	buf.iob0 = galaxybook->performance_mode_values[performance_mode];
+	buf.iob0 = performance_modes[performance_mode];
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &buf,
 			SAWB_LEN_PERFORMANCE_MODE, "setting performance_mode", &buf);
@@ -1132,7 +1147,7 @@ static int performance_mode_acpi_set(struct samsung_galaxybook *galaxybook,
 		return err;
 
 	pr_info("set performance_mode to '%s' (0x%02x)\n", performance_mode_names[performance_mode],
-			galaxybook->performance_mode_values[performance_mode]);
+			performance_modes[performance_mode]);
 
 	return 0;
 }
@@ -1244,64 +1259,16 @@ static int galaxybook_performance_mode_init(struct samsung_galaxybook *galaxyboo
 	if (err)
 		return err;
 
-	/* set count of performance modes */
-	galaxybook->performance_modes_count = 0;
+	/* Ideally, we could use the above to dynamically read performance_modes from the device.
+	 * For now, though, we will just set hard-coded value tables in quirks and then print the values
+	 * here. */
 
-	/* PERFORMANCE_MODE_OPTIMIZED */
-	if (perf_modes_buf.iob0)
-		galaxybook->performance_modes_count++;
-	/* PERFORMANCE_MODE_QUIET */
-	if (perf_modes_buf.iob1)
-		galaxybook->performance_modes_count++;
-	/* PERFORMANCE_MODE_SILENT */
-	if (perf_modes_buf.iob2)
-		galaxybook->performance_modes_count++;
-	/* PERFORMANCE_MODE_PERFORMANCE */
-	if (perf_modes_buf.iob3)
-		galaxybook->performance_modes_count++;
-
-	/* now allocate performance_mode_values array based on count and set all of its values */
-
-	galaxybook->performance_mode_values = kzalloc(sizeof(u8) * galaxybook->performance_modes_count,
-			GFP_KERNEL);
-	if (!galaxybook->performance_mode_values)
-		return -ENOMEM;
-
-	/* PERFORMANCE_MODE_OPTIMIZED */
-	if (perf_modes_buf.iob0) {
-		galaxybook->performance_mode_values[PERFORMANCE_MODE_OPTIMIZED] =
-				perf_mode_values_buf.iob3;
-		if (debug)
-			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
-					performance_mode_names[PERFORMANCE_MODE_OPTIMIZED],
-					galaxybook->performance_mode_values[PERFORMANCE_MODE_OPTIMIZED]);
-	}
-	/* PERFORMANCE_MODE_QUIET */
-	if (perf_modes_buf.iob1) {
-		galaxybook->performance_mode_values[PERFORMANCE_MODE_QUIET] =
-				perf_mode_values_buf.iob4;
-		if (debug)
-			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
-					performance_mode_names[PERFORMANCE_MODE_QUIET],
-					galaxybook->performance_mode_values[PERFORMANCE_MODE_QUIET]);
-	}
-	/* PERFORMANCE_MODE_SILENT */
-	if (perf_modes_buf.iob2) {
-		galaxybook->performance_mode_values[PERFORMANCE_MODE_SILENT] =
-				perf_mode_values_buf.iob5;
-		if (debug)
-			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
-					performance_mode_names[PERFORMANCE_MODE_SILENT],
-					galaxybook->performance_mode_values[PERFORMANCE_MODE_SILENT]);
-	}
-	/* PERFORMANCE_MODE_PERFORMANCE */
-	if (perf_modes_buf.iob3) {
-		galaxybook->performance_mode_values[PERFORMANCE_MODE_PERFORMANCE] =
-				perf_mode_values_buf.iob7;
-		if (debug)
-			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%02x\n",
-					performance_mode_names[PERFORMANCE_MODE_PERFORMANCE],
-					galaxybook->performance_mode_values[PERFORMANCE_MODE_PERFORMANCE]);
+	if (debug) {
+		for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++) {
+			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%x\n",
+					performance_mode_names[i],
+					performance_modes[i]);
+		}
 	}
 
 	/* now check currently set performance_mode; if it is not supported then set default profile */
@@ -1322,9 +1289,9 @@ static int galaxybook_performance_mode_init(struct samsung_galaxybook *galaxyboo
  * Platform device
  */
 
+/* resolve quirks vs module parameters to final values before doing anything in the module */
 static int galaxybook_platform_probe(struct platform_device *pdev)
 {
-	/* resolve quirks vs module parameters to final values before doing anything in the module */
 	const struct galaxybook_device_quirks *quirks;
 	quirks = device_get_match_data(&pdev->dev);
 	if (quirks) {
@@ -1355,6 +1322,15 @@ static int galaxybook_platform_probe(struct platform_device *pdev)
 			acpi_hotkeys = false;
 		if (quirks->disable_wmi_hotkeys && !wmi_hotkeys_was_set)
 			wmi_hotkeys = false;
+
+		/* set performance_modes values if given in quirks */
+		if (quirks->performance_modes) {
+			if (debug)
+				pr_warn("[DEBUG] performance_modes override exist in quirks\n");
+			for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++) {
+				performance_modes[i] = quirks->performance_modes[i];
+			}
+		}
 	}
 	return 0;
 }
