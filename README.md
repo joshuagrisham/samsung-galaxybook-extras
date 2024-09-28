@@ -1,6 +1,6 @@
 # Samsung Galaxybook Extras ⚠️(WIP)⚠️
 
-Samsung Galaxybook Linux platform driver and accompanying utilities.
+Samsung Galaxybook Extras Linux platform driver and accompanying systemd hwdb mappings.
 
 Current status: ⚠️ **WIP but nearing readiness for mainline** ⚠️ (use at your own risk!)
 
@@ -249,27 +249,25 @@ In the end what I found was that I could **definitely** tell a difference in the
 
 Subjectively, I do feel like I experienced that the fan volume was quite a bit lower in the "quiet" mode as compared to the other two, but I did not really notice any major difference in the number of completed operations from the stress test. Optimized and High Performance seemed almost the same to me. I did also notice that there might be some throttling happening when the cores reach near 100C, so maybe that is part of the problem why I could not tell a difference (not sure what is safe to adjust). This could also just be a flawed test mechanism, as well!
 
-## Installing the other "extras"
-
-On top of the platform driver, the "extras" I have added here are intended to clean up some problematic keys on the keyboard (by setting up some systemd hwdb rules for this keyboard), as well as provide a notification for the Fn Lock key (currently supports GNOME only).
-
-Once you have built, installed, and loaded the platform driver then you can also make use of these "extras". The various scripts and configuration files can be installed using the [install-extras.sh](./install-extras.sh) script.
-
-It could be possible to build some sort of service or more robust solution going forward, but this "quick and dirty" sort of works for now!
-
-For notifications based on hotkey presses, I have just relied on `notify-send` which is also not ideal, but for a quick solution it does work for now.
-
 ## Keyboard scancode remapping
 
-The provided file [61-keyboard-samsung-galaxybook.hwdb](./resources/61-keyboard-samsung-galaxybook.hwdb) will correct some keyboard mappings as follows:
+The provided file [61-keyboard-samsung-galaxybook.hwdb](./61-keyboard-samsung-galaxybook.hwdb) will correct some keyboard mappings as follows:
 
 - The "Samsung Settings" key (Fn+F1) is mapped to `config` which seem to automatically launch `gnome-control-center` and I assume might work for other desktop environments? Otherwise a shortcut can be created in your own environment to this key. Without this remapping (including the synthetic release event), the key seems to behave very erratically in Linux, as it seems to send the "plusminus" key non-stop without releasing (sometimes you can "stop" this by pressing Esc, while other times you just have to reboot!).
 - The "Touchpad" key (Fn+F5) is mapped to `F21` as this is typically recognized in Linux as the touchpad toggle key (tested as working in GNOME 45.x)
 - The "Keyboard backlight brightness" key (Fn+F9) is a multi-level toggle key which does not work in the same way as the standard on/off toggle or up+down keys which are typically available. This key is actually handled by the `samsung-galaxybook` platform driver, so this systemd mapping just causes the keyboard key to be ignored.
 - The "Blocking Recording mode" key (Fn+F10) is also handled by the `samsung-galaxybook` platform driver, so it will also be ignored.
-- The "Fn Lock" key (Fn+F12) generates two different events: one when it is turned "on", and a different one when it is turned "off". I have mapped them to F14 (XF86Launch5) and F15 (XF86Launch6) respectively, just so that these can also be mapped to a custom keyboard shortcut for the sake of some kind of on-screen notification
+- The "Fn Lock" key (Fn+F12) generates two different events: one when it is turned "on", and a different one when it is turned "off". These are handled by the firmware so this systemd mapping just causes them to be ignored.
 - If you have set a `battery_saver_percent`, when the battery charge reaches the desired percentage and stops then an input event is automatically generated to the standard keyboard device. This event I have mapped to `battery` so that it will display standard noitifcations but can also be mapped to a custom keyboard shortcut.
 - The "Performance mode" key (Fn+F11) comes as an ACPI notification and is handled by the `samsung-galaxybook` platform driver.
+
+You can install this mapping file as follows:
+
+```sh
+sudo cp 61-keyboard-samsung-galaxybook.hwdb /etc/udev/hwdb.d/
+sudo systemd-hwdb update
+sudo udevadm trigger
+```
 
 ### Matching additional device keyboards
 
