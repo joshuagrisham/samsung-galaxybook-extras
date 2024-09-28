@@ -2,7 +2,8 @@
 /*
  * Samsung Galaxybook Extras driver
  *
- * Copyright (c) 2023-2024 Joshua Grisham <josh@joshuagrisham.com>
+ * Copyright (c) 2024 Joshua Grisham <josh@joshuagrisham.com>
+ * Copyright (c) 2024 Giulio Girardi <giulio@rapgenic.com>
  *
  * Implementation inspired by existing x86 platform drivers.
  * Thank you to the authors!
