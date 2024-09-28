@@ -154,9 +154,7 @@ There is currently no OSD popup but the event can be captured from the "Samsung 
 
 A new LED class called `samsung-galaxybook::kbd_backlight` is created which can be controlled via `sysfs` at `/sys/class/leds/samsung-galaxybook::kbd_backlight/brightness` (values 0 to 3) or by many of the standard utilities such as `brightnessctl`, `light`, etc.
 
-It also seems to be picked up automatically in GNOME 45.x in the panel, where you can click the arrow beside `Keyboard` and adjust the slider:
-
-![GNOME Panel Keyboard Backlight](./resources/keyboard-backlight-gnome.png "GNOME Panel Keyboard Backlight")
+It also seems to be picked up automatically in GNOME 45.x in the panel, where you can click the arrow beside `Keyboard` and adjust the slider.
 
 Note that the setting "automatically turn off the keyboard backlight after X seconds" in Windows is actually controlled by Samsung's application service and not by the device driver itself; there is a similar feature in GNOME (and again, likely others) where it toggles to the minimum level after a certain idle period (e.g. from 3 to 1 when you are idle, and then back to 3 when you resume), but regardless this feature should probably be controlled in the userspace somehow and not by the kernel driver.
 
