@@ -18,18 +18,16 @@ The intent is to somewhat replicate in Linux what Samsung has done in Windows wi
 
 This is a new and (currently) completely out-of-tree kernel platform driver intended to mimic what the **Samsung System Event Controller** Windows system device driver seems to be doing (namely, communicate with the `SCAI` ACPI device in order to control these extra features). Once more features have been added and it has been tested then my intention is to try and submit the driver to be added to the kernel.
 
-`cd` over to the [driver/](./driver/) folder and follow the README there for compiling and installing the module.
-
 The following features are currently implemented:
 
-- An *early* attempt to support hotkey handling (supports only keyboard backlight and performance mode toggle at this time)
+- Support for hotkey handling
 - Keyboard backlight
 - Battery saver percent (stop charging battery at given percentage value)
 - Start device automatically when opening lid
 - USB ports provide charging when device is turned off
 - Toggle to allow or block recording from the built-in camera and microphone
-- Fan speed monitoring via `fan_speed_rpm` sysfs attribute plus a new hwmon device.
-- Performance mode (Performance, Optimized, Quiet, Silent)
+- Fan speed monitoring via `fan_speed_rpm` sysfs attribute plus a new hwmon device
+- Performance mode (Performance, Optimized, Quiet, Silent) implemented as platform profiles
 
 The following features might be possible to implement but require  additional debugging and development:
 
@@ -61,6 +59,66 @@ The platform driver supports the following module parameters:
 In general the intention of these parameters is to allow for enabling or disabling of various features provided by the driver, especially in cases where a particular feature does not appear to work with your device. The availability of the various "settings" flags (`battery_saver_percent`, `start_on_lid_open`, etc) will always be enabled and cannot be disabled at this time.
 
 > **Note:** Please raise an issue if you find that you need to disable a certain feature in order to avoid a problem that it causes with your device!
+
+### Building and installing
+
+Compile the module out-of-tree but against the currently loaded kernel's modules:
+
+```sh
+make -C /lib/modules/`uname -r`/build M=$PWD
+```
+
+Install this module into your currently loaded kernel's modules:
+
+```sh
+sudo make -C /lib/modules/`uname -r`/build M=$PWD modules_install
+sudo depmod
+```
+
+> *Note:* if you wish to enable `debug` by default then you can add `samsung_galaxybook.debug=true` to your boot parameters.
+
+Load the module (including enabling debugging messages):
+
+```sh
+sudo modprobe samsung-galaxybook debug=true
+```
+
+Unload the module:
+
+```sh
+sudo rmmod samsung-galaxybook
+```
+
+Uninstall the module:
+
+```sh
+sudo rm /lib/modules/`uname -r`/updates/samsung-galaxybook.ko
+```
+
+#### How to avoid 'signature and/or required key missing'
+
+If you want to sign the driver to avoid the message `samsung_galaxybook: module verification failed: signature and/or required key missing - tainting kernel`, then you will need to sign the module following whatever process is typical for your distribution. For Debian-based distrubutions (including Ubunutu), you can install the `linux-source` package for your current kernel and used the included keys and scripts to sign the module as follows:
+
+```sh
+sudo rmmod samsung-galaxybook
+
+/usr/src/`uname -r`/debian/scripts/sign-module sha512 /usr/src/`uname -r`/debian/certs/signing_key.pem /usr/src/`uname -r`/debian/certs/signing_key.x509 samsung-galaxybook.ko
+
+sudo cp samsung-galaxybook.ko /lib/modules/`uname -r`/updates/samsung-galaxybook.ko
+
+sudo modprobe samsung-galaxybook debug=true
+```
+
+#### Enable or disable features using parameters
+
+The module parameters can be used to enable or disable most features. For example, the following would reload the module with only the core settings flags (`battery_saver_percent`, `start_on_lid_open`, etc) and the kbd_backlight LED class, and all other features would be disabled:
+
+```sh
+sudo rmmod samsung-galaxybook
+sudo modprobe samsung-galaxybook debug=false kbd_backlight=on performance_mode=off fan_speed=off i8042_filter=off acpi_hotkeys=off wmi_hotkeys=off
+```
+
+Note that these can also be added to the boot parameters (e.g. `samsung_galaxybook.fan_speed=off`).
 
 ### General observations
 
