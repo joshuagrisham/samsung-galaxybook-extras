@@ -959,11 +959,9 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 		galaxybook->fan_speeds_count++;
 	}
 
-	if (debug) {
-		pr_warn("[DEBUG] initialized fan speed reporting with the following levels:\n");
-		for (i = 0; i < galaxybook->fan_speeds_count; i++)
-			pr_warn("[DEBUG] level %d = %d\n", i, galaxybook->fan_speeds[i]);
-	}
+	pr_info("initialized fan speed reporting with the following levels:\n");
+	for (i = 0; i < galaxybook->fan_speeds_count; i++)
+		pr_info("  fan speed level %d = %d\n", i, galaxybook->fan_speeds[i]);
 
 out_free:
 	ACPI_FREE(response.pointer);
@@ -1263,13 +1261,9 @@ static int galaxybook_performance_mode_init(struct samsung_galaxybook *galaxyboo
 	 * For now, though, we will just set hard-coded value tables in quirks and then print the values
 	 * here. */
 
-	if (debug) {
-		for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++) {
-			pr_warn("[DEBUG] will support performance_mode '%s' with value 0x%x\n",
-					performance_mode_names[i],
-					performance_modes[i]);
-		}
-	}
+	for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++)
+		pr_info("will support performance_mode '%s' with value 0x%x\n", performance_mode_names[i],
+				performance_modes[i]);
 
 	/* now check currently set performance_mode; if it is not supported then set default profile */
 	galaxybook_performance_mode current_performance_mode;
