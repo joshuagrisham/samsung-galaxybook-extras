@@ -252,7 +252,6 @@ struct sawb {
 #define ACPI_FAN_SPEED_VALUE  "\\_SB.PC00.LPCB.H_EC.FANS"
 
 #define KBD_BACKLIGHT_MAX_BRIGHTNESS  3
-#define BATTERY_SAVER_PERCENTAGE      0x50
 
 #define ACPI_NOTIFY_BATTERY_STATE_CHANGED    0x61
 #define ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE  0x70
@@ -471,12 +470,26 @@ static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
  */
 
 
-/* Battery saver mode (stop charging battery at 80%) */
+/* Battery saver percent (stop charging battery at given percentage value) */
 
-static int battery_saver_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
+/* 
+ * Note that as of this writing, the Samsung Settings app in Windows expects a value of 0x50 (80%)
+ * to mean "on" and a value of 0 to mean "off", but the device seems to support any number between
+ * 0 and 100. Use only values 0 or 80 if the user wishes for full compatibility with Windows;
+ * otherwise, the user is free to set whatever arbitrary percentage that they would like here.
+ */
+static int battery_saver_percent_acpi_set(struct samsung_galaxybook *galaxybook, const u8 value)
 {
 	struct sawb buf = {0};
 	int err;
+
+	if (value > 100)
+		return -EINVAL;
+
+	if (value == 100) {
+		pr_warn("setting battery_saver_percent to 100 " \
+				"will effectively just turn off battery saver; value will be set to 0 (off)\n");
+	}
 
 	buf.safn = SAFN;
 	buf.sasb = SASB_POWER_MANAGEMENT;
@@ -484,31 +497,26 @@ static int battery_saver_acpi_set(struct samsung_galaxybook *galaxybook, const b
 	buf.guds[0] = 0xe9;
 	buf.guds[1] = 0x90;
 
-	/* Payload value should be 0x50 (80%) to turn on, and 0x00 to turn off, to match latest driver
-	 * from Windows, and so that the Windows Samsung Settings app works correctly with this value.
-	 * It is actually possible to set other values (so take the input as an integer), but a
-	 * decision would need to be made if this makes sense or not (especially that it will break
-	 * compatibilty with Samsung Settings when booting into Windows). Also, a reasonable range would
-	 * need to be decided (e.g. only allow anything between 60 and 95%?). */
-	buf.guds[2] = value ? BATTERY_SAVER_PERCENTAGE : 0x00;
+	buf.guds[2] = (value == 100 ? 0 : value);
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
-			"setting battery_saver", &buf);
+			"setting battery_saver_percent", &buf);
 	if (err)
 		return err;
 
-	if (buf.guds[1] != 0x90 && buf.guds[2] != (value ? BATTERY_SAVER_PERCENTAGE : 0x00)) {
-		pr_err("invalid response when setting battery_saver; returned value was: 0x%02x 0x%02x\n",
+	if (buf.guds[1] != 0x90 && buf.guds[2] != (value == 100 ? 0 : value)) {
+		pr_err("invalid response when setting battery_saver_percent; " \
+				"returned value was: 0x%02x 0x%02x\n",
 				buf.guds[1], buf.guds[2]);
 		return -EINVAL;
 	}
 
-	pr_info("turned battery_saver %s\n", value ? "on (1)" : "off (0)");
+	pr_info("set battery_saver_percent to %d\n", buf.guds[2]);
 
 	return 0;
 }
 
-static int battery_saver_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
+static int battery_saver_percent_acpi_get(struct samsung_galaxybook *galaxybook, u8 *value)
 {
 	struct sawb buf = {0};
 	int err;
@@ -520,51 +528,52 @@ static int battery_saver_acpi_get(struct samsung_galaxybook *galaxybook, bool *v
 	buf.guds[1] = 0x91;
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
-			"getting battery_saver", &buf);
+			"getting battery_saver_percent", &buf);
 	if (err)
 		return err;
 
-	*value = (buf.guds[1] == BATTERY_SAVER_PERCENTAGE ? 1 : 0);
+	*value = buf.guds[1];
 
 	if (debug) {
-		pr_warn("[DEBUG] battery_saver is currently %s (%d%%)\n",
-				(buf.guds[1] == BATTERY_SAVER_PERCENTAGE ? "on (1)" : "off (0)"), buf.guds[1]);
+		pr_warn("[DEBUG] battery saver is currently %s; battery_saver_percent is %d\n",
+				(buf.guds[1] > 0 ? "on" : "off"), buf.guds[1]);
 	}
 
 	return 0;
 }
 
-static ssize_t battery_saver_store(struct device *dev, struct device_attribute *attr,
+static ssize_t battery_saver_percent_store(struct device *dev, struct device_attribute *attr,
 				const char *buffer, size_t count)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	bool value;
+	u8 value;
 	int err;
 
-	if (kstrtobool(buffer, &value) < 0)
+	if (!count || kstrtou8(buffer, 0, &value))
 		return -EINVAL;
 
-	err = battery_saver_acpi_set(galaxybook, value);
+	err = battery_saver_percent_acpi_set(galaxybook, value);
 	if (err)
 		return err;
 
 	return count;
 }
 
-static ssize_t battery_saver_show(struct device *dev, struct device_attribute *attr, char *buffer)
+static ssize_t battery_saver_percent_show(struct device *dev, struct device_attribute *attr,
+				char *buffer)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	bool value;
+	u8 value;
 	int err;
 
-	err = battery_saver_acpi_get(galaxybook, &value);
+	err = battery_saver_percent_acpi_get(galaxybook, &value);
 	if (err)
 		return err;
 
-	return sysfs_emit(buffer, "%u\n", value);
+	return sysfs_emit(buffer, "%d\n", value);
 }
 
-static DEVICE_ATTR_RW(battery_saver);
+static DEVICE_ATTR_RW(battery_saver_percent);
 
 
 /* Dolby Atmos mode for speakers - needs further investigation */
@@ -574,7 +583,7 @@ static bool dolby_atmos;
 static ssize_t dolby_atmos_store(struct device *dev, struct device_attribute *attr,
 				const char *buffer, size_t count)
 {
-	if (kstrtobool(buffer, &dolby_atmos) < 0)
+	if (!count || kstrtobool(buffer, &dolby_atmos))
 		return -EINVAL;
 	return count;
 }
@@ -653,7 +662,7 @@ static ssize_t start_on_lid_open_store(struct device *dev, struct device_attribu
 	bool value;
 	int err;
 
-	if (kstrtobool(buffer, &value) < 0)
+	if (!count || kstrtobool(buffer, &value))
 		return -EINVAL;
 
 	err = start_on_lid_open_acpi_set(galaxybook, value);
@@ -740,7 +749,7 @@ static ssize_t usb_charging_store(struct device *dev, struct device_attribute *a
 	bool value;
 	int err;
 
-	if (kstrtobool(buffer, &value) < 0)
+	if (!count || kstrtobool(buffer, &value))
 		return -EINVAL;
 
 	err = usb_charging_acpi_set(galaxybook, value);
@@ -825,7 +834,7 @@ static ssize_t allow_recording_store(struct device *dev, struct device_attribute
 	bool value;
 	int err;
 
-	if (kstrtobool(buffer, &value) < 0)
+	if (!count || kstrtobool(buffer, &value))
 		return -EINVAL;
 
 	err = allow_recording_acpi_set(galaxybook, value);
@@ -854,7 +863,7 @@ static DEVICE_ATTR_RW(allow_recording);
 /* Add attributes to necessary groups etc */
 
 static struct attribute *galaxybook_attrs[] = {
-	&dev_attr_battery_saver.attr,
+	&dev_attr_battery_saver_percent.attr,
 	/* &dev_attr_dolby_atmos.attr, */ /* removed pending further investigation */
 	&dev_attr_start_on_lid_open.attr,
 	&dev_attr_usb_charging.attr,
