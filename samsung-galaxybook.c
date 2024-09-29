@@ -3,7 +3,7 @@
  * Samsung Galaxybook Extras driver
  *
  * Copyright (c) 2024 Joshua Grisham <josh@joshuagrisham.com>
- * Copyright (c) 2024 Giulio Girardi <giulio@rapgenic.com>
+ * Copyright (c) 2024 Giulio Girardi <giulio.girardi@protechgroup.it>
  *
  * Implementation inspired by existing x86 platform drivers.
  * Thank you to the authors!
@@ -62,7 +62,7 @@ static void warn_param_override(const char *param_name)
 			"https://github.com/joshuagrisham/samsung-galaxybook-extras/issues\n",
 			param_name);
 }
-int galaxybook_param_set(const char *val, const struct kernel_param *kp) {
+static int galaxybook_param_set(const char *val, const struct kernel_param *kp) {
 	if (strcmp(kp->name, "kbd_backlight") == 0)
 		kbd_backlight_was_set = true;
 	if (strcmp(kp->name, "performance_mode") == 0)
@@ -254,11 +254,15 @@ struct sawb {
 #define KBD_BACKLIGHT_MAX_BRIGHTNESS  3
 
 #define ACPI_NOTIFY_BATTERY_STATE_CHANGED    0x61
+#define ACPI_NOTIFY_TABLE_OFF                0x6d
+#define ACPI_NOTIFY_TABLE_ON                 0x6c
 #define ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE  0x70
 
 static const struct key_entry galaxybook_acpi_keymap[] = {
 	{KE_KEY, ACPI_NOTIFY_BATTERY_STATE_CHANGED, { KEY_BATTERY } },
 	{KE_KEY, ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE, { KEY_PROG3 } },
+	{KE_KEY, ACPI_NOTIFY_TABLE_OFF, { KEY_PROG1 } },
+	{KE_KEY, ACPI_NOTIFY_TABLE_ON, { KEY_PROG2 } },
 	{KE_END, 0},
 };
 
@@ -316,7 +320,7 @@ static int galaxybook_acpi_method(struct samsung_galaxybook *galaxybook, acpi_st
 					purpose_str,
 					method);
 			status = -EIO;
-		} else if (out_obj->buffer.pointer[5] == 0xff) {
+		} else if (out_obj->buffer.pointer[4] == 0xff) {
 			pr_err("failed %s with ACPI method %s; failure code 0xff reported from device\n",
 					purpose_str,
 					method);
@@ -995,7 +999,7 @@ static ssize_t fan_speed_rpm_show(struct device *dev, struct device_attribute *a
 }
 static DEVICE_ATTR_RO(fan_speed_rpm);
 
-void galaxybook_fan_speed_exit(struct samsung_galaxybook *galaxybook)
+static void galaxybook_fan_speed_exit(struct samsung_galaxybook *galaxybook)
 {
 	sysfs_remove_file(&galaxybook->fan.dev.kobj, &dev_attr_fan_speed_rpm.attr);
 }

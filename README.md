@@ -329,6 +329,7 @@ sudo udevadm trigger
 
 Currently, these keyboard mapping rules should apply to all Galaxy Book2 and Book3 series notebooks by matching on an "svn" starting with "Samsung" (case insensitve) plus a "pn" string of three digits followed by any one of the following suffixes:
 
+- 'QDB' (Galaxy Book 360 series)
 - `XED` (Galaxy Book2 series)
 - `QED` (Galaxy Book2 360 series)
 - `XFG` (Galaxy Book3 series)
