@@ -1,23 +1,15 @@
+# To be merged into https://github.com/systemd/systemd/blob/main/hwdb.d/60-keyboard.hwdb
+
 ###########################################################
-# Samsung Galaxy Book series notebooks
+# Samsung
 ###########################################################
 
-# xxxQDB: Galaxy Book 360 series
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]QDB:*
-# xxxXED: Galaxy Book2 series
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]XED:*
-# xxxQED: Galaxy Book2 360 series
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]QED:*
-# xxxXFG: Galaxy Book3 series
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]XFG:*
-# xxxQFG: Galaxy Book3 360 series
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]QFG:*
-# xxxXFH: Galaxy Book3 Ultra series
-evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:pn[0-9][0-9][0-9]XFH:*
- KEYBOARD_KEY_ce=!config   # Settings
- KEYBOARD_KEY_ac=unknown   # Multi-level keyboard backlight toggle - handled by samsung-galaxybook
- KEYBOARD_KEY_9f=unknown   # Camera toggle - handled by samsung-galaxybook
- KEYBOARD_KEY_76=f21       # Touchpad toggle
- KEYBOARD_KEY_a8=!unknown  # Fn lock On - handled by hardware
- KEYBOARD_KEY_a9=!unknown  # Fn lock Off - handled by hardware
- KEYBOARD_KEY_8f=!battery  # Key emitted for notification when battery saver stops the battery from charging
+# Galaxy Book series
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:sku*SCAI*:*
+ KEYBOARD_KEY_ce=!config                                # Settings
+ KEYBOARD_KEY_ac=unknown                                # Multi-level keyboard backlight toggle - handled by samsung-galaxybook
+ KEYBOARD_KEY_9f=unknown                                # Camera and microphone toggle - handled by samsung-galaxybook
+ KEYBOARD_KEY_76=f21                                    # Touchpad toggle
+ KEYBOARD_KEY_a8=!unknown                               # Fn lock On - handled by hardware
+ KEYBOARD_KEY_a9=!unknown                               # Fn lock Off - handled by hardware
+ KEYBOARD_KEY_8f=!battery                               # Notification that battery has met charge control end threshold

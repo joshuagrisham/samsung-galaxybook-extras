@@ -44,6 +44,8 @@ Note that for the devices with the ACPI Device ID `SAM0427`, there will currentl
 
 If you have a device with `SAM0427` and wish to help provide support to overcome the above limitations, please feel free to create an issue!
 
+I have also seen that Windows uses the same driver for `SAM0426` (used by devices like the Notebook 9 Pro 15" and/or similar), so my suspicion is that large parts of this driver probably also work for these devices. If you have one of these devices, and want to test this driver with it, please create an issue for help and to share your findings.
+
 ### Module Parameters
 
 The platform driver supports the following module parameters:
@@ -317,7 +319,7 @@ The provided file [61-keyboard-samsung-galaxybook.hwdb](./61-keyboard-samsung-ga
 - The "Keyboard backlight brightness" key (Fn+F9) is a multi-level toggle key which does not work in the same way as the standard on/off toggle or up+down keys which are typically available. This key is actually handled by the `samsung-galaxybook` platform driver, so this systemd mapping just causes the keyboard key to be ignored.
 - The "Blocking Recording mode" key (Fn+F10) is also handled by the `samsung-galaxybook` platform driver, so it will also be ignored.
 - The "Fn Lock" key (Fn+F12) generates two different events: one when it is turned "on", and a different one when it is turned "off". These are handled by the firmware so this systemd mapping just causes them to be ignored.
-- If you have set a `battery_saver_percent`, when the battery charge reaches the desired percentage and stops then an input event is automatically generated to the standard keyboard device. This event I have mapped to `battery` so that it will display standard noitifcations but can also be mapped to a custom keyboard shortcut.
+- If you have set a `charge_control_end_threshold`, when the battery charge reaches the desired percentage and stops then an input event is automatically generated to the standard keyboard device. This event I have mapped to `battery` so that it will display standard noitifcations but can also be mapped to a custom keyboard shortcut.
 - The "Performance mode" key (Fn+F11) comes as an ACPI notification and is handled by the `samsung-galaxybook` platform driver.
 
 You can install this mapping file as follows:
@@ -330,16 +332,9 @@ sudo udevadm trigger
 
 ### Matching additional device keyboards
 
-Currently, these keyboard mapping rules should apply to all Galaxy Book2 and Book3 series notebooks by matching on an "svn" starting with "Samsung" (case insensitve) plus a "pn" string of three digits followed by any one of the following suffixes:
+The keyboard mapping rules should apply to any Samsung device that has the value `SCAI` as part of its `sku` DMI field. You can check if your device includes the value `SCAI` as part of its SKU number string by running `sudo dmidecode --type 1`.
 
-- `QDB` (Galaxy Book 360 series)
-- `XED` (Galaxy Book2 series)
-- `QED` (Galaxy Book2 360 series)
-- `XFG` (Galaxy Book3 series)
-- `QFG` (Galaxy Book3 360 series)
-- `XFH` (Galaxy Book3 Ultra series)
-
-This is quite a broad filter string but my hope is that the keyboard mappings should actually work for all of these models as from what I have seen, they all seem to have a similar keyboard layout.
+This should include most if not all of the Samsung Galaxy Book series notebooks, plus any others that likely would be able to use this platform driver (as `SCAI` is in fact the ID for the ACPI device that this driver uses, so the working theory and as has been shown by testing and feedback is that they will all be following very similar keyboard mappings).
 
 In case you have issues where the mapping does not seem to be picked up on your device, then we might need to modify the filter string. You can get your own device's evdev dmi string like this:
 
