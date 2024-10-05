@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Samsung Galaxybook Extras driver
+ * Samsung Galaxy Book series extras driver
  *
  * Copyright (c) 2024 Joshua Grisham <josh@joshuagrisham.com>
  * Copyright (c) 2024 Giulio Girardi <giulio.girardi@protechgroup.it>
@@ -30,7 +30,7 @@
 #include <acpi/battery.h>
 
 #define SAMSUNG_GALAXYBOOK_CLASS  "samsung-galaxybook"
-#define SAMSUNG_GALAXYBOOK_NAME   "Samsung Galaxybook Extras"
+#define SAMSUNG_GALAXYBOOK_NAME   "Samsung Galaxy Book Extras"
 
 
 /*
@@ -39,6 +39,9 @@
 
 static bool kbd_backlight = true;
 static bool kbd_backlight_was_set;
+
+static bool battery_threshold = true;
+static bool battery_threshold_was_set;
 
 static bool performance_mode = true;
 static bool performance_mode_was_set;
@@ -67,6 +70,8 @@ static void warn_param_override(const char *param_name)
 static int galaxybook_param_set(const char *val, const struct kernel_param *kp) {
 	if (strcmp(kp->name, "kbd_backlight") == 0)
 		kbd_backlight_was_set = true;
+	if (strcmp(kp->name, "battery_threshold") == 0)
+		battery_threshold_was_set = true;
 	if (strcmp(kp->name, "performance_mode") == 0)
 		performance_mode_was_set = true;
 	if (strcmp(kp->name, "fan_speed") == 0)
@@ -87,6 +92,8 @@ static struct kernel_param_ops galaxybook_module_param_ops = {
 
 module_param_cb(kbd_backlight, &galaxybook_module_param_ops, &kbd_backlight, 0644);
 MODULE_PARM_DESC(kbd_backlight, "Enable Keyboard Backlight control (default on)");
+module_param_cb(battery_threshold, &galaxybook_module_param_ops, &battery_threshold, 0644);
+MODULE_PARM_DESC(battery_threshold, "Enable battery charge threshold control (default on)");
 module_param_cb(performance_mode, &galaxybook_module_param_ops, &performance_mode, 0644);
 MODULE_PARM_DESC(performance_mode, "Enable Performance Mode control (default on)");
 module_param_cb(fan_speed, &galaxybook_module_param_ops, &fan_speed, 0644);
@@ -130,6 +137,7 @@ static u8 performance_modes[] = {
 
 struct galaxybook_device_quirks {
 	bool disable_kbd_backlight;
+	bool disable_battery_threshold;
 	bool disable_performance_mode;
 	bool disable_fan_speed;
 	bool disable_i8042_filter;
@@ -211,8 +219,8 @@ static const guid_t performance_mode_guid_value =
 
 #define SASB_KBD_BACKLIGHT    0x78
 #define SASB_POWER_MANAGEMENT 0x7a
-#define SASB_USB_CHARGING_GET 0x67
-#define SASB_USB_CHARGING_SET 0x68
+#define SASB_USB_CHARGE_GET   0x67
+#define SASB_USB_CHARGE_SET   0x68
 #define SASB_NOTIFICATIONS    0x86
 #define SASB_ALLOW_RECORDING  0x8a
 
@@ -256,15 +264,15 @@ struct sawb {
 #define KBD_BACKLIGHT_MAX_BRIGHTNESS  3
 
 #define ACPI_NOTIFY_BATTERY_STATE_CHANGED    0x61
-#define ACPI_NOTIFY_TABLE_OFF                0x6d
-#define ACPI_NOTIFY_TABLE_ON                 0x6c
+#define ACPI_NOTIFY_DEVICE_ON_TABLE          0x6c
+#define ACPI_NOTIFY_DEVICE_OFF_TABLE         0x6d
 #define ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE  0x70
 
 static const struct key_entry galaxybook_acpi_keymap[] = {
 	{KE_KEY, ACPI_NOTIFY_BATTERY_STATE_CHANGED, { KEY_BATTERY } },
 	{KE_KEY, ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE, { KEY_PROG3 } },
-	{KE_KEY, ACPI_NOTIFY_TABLE_OFF, { KEY_PROG1 } },
-	{KE_KEY, ACPI_NOTIFY_TABLE_ON, { KEY_PROG2 } },
+	{KE_KEY, ACPI_NOTIFY_DEVICE_ON_TABLE, { KEY_F14 } },
+	{KE_KEY, ACPI_NOTIFY_DEVICE_OFF_TABLE, { KEY_F15 } },
 	{KE_END, 0},
 };
 
@@ -322,8 +330,8 @@ static int galaxybook_acpi_method(struct samsung_galaxybook *galaxybook, acpi_st
 					purpose_str,
 					method);
 			status = -EIO;
-		} else if (out_obj->buffer.pointer[4] == 0xff) {
-			pr_err("failed %s with ACPI method %s; failure code 0xff reported from device\n",
+		} else if (out_obj->buffer.pointer[4] != 0xaa) {
+			pr_err("failed %s with ACPI method %s; device did not respond with success code 0xaa\n",
 					purpose_str,
 					method);
 			status = -EIO;
@@ -476,193 +484,7 @@ static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
  */
 
 
-/* Battery saver percent (stop charging battery at given percentage value) */
-
-/*
- * Note that as of this writing, the Samsung Settings app in Windows expects a value of 0x50 (80%)
- * to mean "on" and a value of 0 to mean "off", but the device seems to support any number between
- * 0 and 100. Use only values 0 or 80 if the user wishes for full compatibility with Windows;
- * otherwise, the user is free to set whatever arbitrary percentage that they would like here.
- */
-static int battery_saver_percent_acpi_set(struct samsung_galaxybook *galaxybook, const u8 value)
-{
-	struct sawb buf = {0};
-	int err;
-
-	if (value > 100)
-		return -EINVAL;
-
-	if (value == 100) {
-		pr_warn("setting battery_saver_percent to 100 " \
-				"will effectively just turn off battery saver; value will be set to 0 (off)\n");
-	}
-
-	buf.safn = SAFN;
-	buf.sasb = SASB_POWER_MANAGEMENT;
-	buf.gunm = GUNM_SET;
-	buf.guds[0] = 0xe9;
-	buf.guds[1] = 0x90;
-
-	buf.guds[2] = (value == 100 ? 0 : value);
-
-	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
-			"setting battery_saver_percent", &buf);
-	if (err)
-		return err;
-
-	if (buf.guds[1] != 0x90 && buf.guds[2] != (value == 100 ? 0 : value)) {
-		pr_err("invalid response when setting battery_saver_percent; " \
-				"returned value was: 0x%02x 0x%02x\n",
-				buf.guds[1], buf.guds[2]);
-		return -EINVAL;
-	}
-
-	pr_info("set battery_saver_percent to %d\n", buf.guds[2]);
-
-	return 0;
-}
-
-static int battery_saver_percent_acpi_get(struct samsung_galaxybook *galaxybook, u8 *value)
-{
-	struct sawb buf = {0};
-	int err;
-
-	buf.safn = SAFN;
-	buf.sasb = SASB_POWER_MANAGEMENT;
-	buf.gunm = 0x82;
-	buf.guds[0] = 0xe9;
-	buf.guds[1] = 0x91;
-
-	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
-			"getting battery_saver_percent", &buf);
-	if (err)
-		return err;
-
-	*value = buf.guds[1];
-
-	if (debug) {
-		pr_warn("[DEBUG] battery saver is currently %s; battery_saver_percent is %d\n",
-				(buf.guds[1] > 0 ? "on" : "off"), buf.guds[1]);
-	}
-
-	return 0;
-}
-
-static ssize_t battery_saver_percent_store(struct device *dev, struct device_attribute *attr,
-				const char *buffer, size_t count)
-{
-	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	u8 value;
-	int err;
-
-	if (!count || kstrtou8(buffer, 0, &value))
-		return -EINVAL;
-
-	err = battery_saver_percent_acpi_set(galaxybook, value);
-	if (err)
-		return err;
-
-	return count;
-}
-
-static ssize_t battery_saver_percent_show(struct device *dev, struct device_attribute *attr,
-				char *buffer)
-{
-	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
-	u8 value;
-	int err;
-
-	err = battery_saver_percent_acpi_get(galaxybook, &value);
-	if (err)
-		return err;
-
-	return sysfs_emit(buffer, "%d\n", value);
-}
-
-static DEVICE_ATTR_RW(battery_saver_percent);
-
-static ssize_t charge_control_end_threshold_store(struct device *dev, struct device_attribute *attr,
-				const char *buffer, size_t count)
-{
-	u8 value;
-	int err;
-
-	if (!count || kstrtou8(buffer, 0, &value))
-		return -EINVAL;
-
-	// 100 is a special value that means "off"
-	if (value == 100)
-		value = 0;
-
-	err = battery_saver_percent_acpi_set(galaxybook_ptr, value);
-	if (err)
-		return err;
-
-	return count;
-}
-
-static ssize_t charge_control_end_threshold_show(struct device *dev, struct device_attribute *attr,
-				char *buffer)
-{
-	u8 value;
-	int err;
-
-	err = battery_saver_percent_acpi_get(galaxybook_ptr, &value);
-	if (err)
-		return err;
-
-	if (value == 0)
-		value = 100;
-
-	return sysfs_emit(buffer, "%d\n", value);}
-
-static DEVICE_ATTR_RW(charge_control_end_threshold);
-
-static int samsung_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
-{
-	if (device_create_file(&battery->dev,
-			       &dev_attr_charge_control_end_threshold))
-		return -ENODEV;
-
-	return 0;
-}
-
-static int samsung_battery_remove(struct power_supply *battery, struct acpi_battery_hook *hook)
-{
-	device_remove_file(&battery->dev,
-			   &dev_attr_charge_control_end_threshold);
-	return 0;
-}
-
-static struct acpi_battery_hook battery_hook = {
-	.add_battery = samsung_battery_add,
-	.remove_battery = samsung_battery_remove,
-	.name = "Samsung Galaxy Book Battery Extension",
-};
-
-/* Dolby Atmos mode for speakers - needs further investigation */
-/*
-static bool dolby_atmos;
-
-static ssize_t dolby_atmos_store(struct device *dev, struct device_attribute *attr,
-				const char *buffer, size_t count)
-{
-	if (!count || kstrtobool(buffer, &dolby_atmos))
-		return -EINVAL;
-	return count;
-}
-
-static ssize_t dolby_atmos_show(struct device *dev, struct device_attribute *attr, char *buffer)
-{
-	return sysfs_emit(buffer, "%u\n", dolby_atmos);
-}
-
-static DEVICE_ATTR_RW(dolby_atmos);
-*/
-
-
 /* Start on lid open (device should power on when lid is opened) */
-
 
 static int start_on_lid_open_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
 {
@@ -753,60 +575,60 @@ static ssize_t start_on_lid_open_show(struct device *dev, struct device_attribut
 static DEVICE_ATTR_RW(start_on_lid_open);
 
 
-/* USB Charging (USB ports can charge other devices even when device is powered off) */
+/* USB Charge (USB ports can charge other devices even when device is powered off) */
 
-static int usb_charging_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
+static int usb_charge_acpi_set(struct samsung_galaxybook *galaxybook, const bool value)
 {
 	struct sawb buf = {0};
 	int err;
 
 	buf.safn = SAFN;
-	buf.sasb = SASB_USB_CHARGING_SET;
+	buf.sasb = SASB_USB_CHARGE_SET;
 
 	/* gunm value should be 0x81 to turn on and 0x80 to turn off */
 	buf.gunm = value ? 0x81 : 0x80;
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
-			"setting usb_charging", &buf);
+			"setting usb_charge", &buf);
 	if (err)
 		return err;
 
 	if (buf.gunm != value) {
-		pr_err("invalid response when setting usb_charging; returned value was: 0x%02x\n",
+		pr_err("invalid response when setting usb_charge; returned value was: 0x%02x\n",
 				buf.gunm);
 		return -EINVAL;
 	}
 
-	pr_info("turned usb_charging %s\n", value ? "on (1)" : "off (0)");
+	pr_info("turned usb_charge %s\n", value ? "on (1)" : "off (0)");
 
 	return 0;
 }
 
-static int usb_charging_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
+static int usb_charge_acpi_get(struct samsung_galaxybook *galaxybook, bool *value)
 {
 	struct sawb buf = {0};
 	int err;
 
 	buf.safn = SAFN;
-	buf.sasb = SASB_USB_CHARGING_GET;
+	buf.sasb = SASB_USB_CHARGE_GET;
 	buf.gunm = 0x80;
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
-			"getting usb_charging", &buf);
+			"getting usb_charge", &buf);
 	if (err)
 		return err;
 
 	*value = buf.gunm;
 
 	if (debug) {
-		pr_warn("[DEBUG] usb_charging is currently %s\n",
+		pr_warn("[DEBUG] usb_charge is currently %s\n",
 				(buf.gunm ? "on (1)" : "off (0)"));
 	}
 
 	return 0;
 }
 
-static ssize_t usb_charging_store(struct device *dev, struct device_attribute *attr,
+static ssize_t usb_charge_store(struct device *dev, struct device_attribute *attr,
 				const char *buffer, size_t count)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
@@ -816,27 +638,27 @@ static ssize_t usb_charging_store(struct device *dev, struct device_attribute *a
 	if (!count || kstrtobool(buffer, &value))
 		return -EINVAL;
 
-	err = usb_charging_acpi_set(galaxybook, value);
+	err = usb_charge_acpi_set(galaxybook, value);
 	if (err)
 		return err;
 
 	return count;
 }
 
-static ssize_t usb_charging_show(struct device *dev, struct device_attribute *attr, char *buffer)
+static ssize_t usb_charge_show(struct device *dev, struct device_attribute *attr, char *buffer)
 {
 	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
 	bool value;
 	int err;
 
-	err = usb_charging_acpi_get(galaxybook, &value);
+	err = usb_charge_acpi_get(galaxybook, &value);
 	if (err)
 		return err;
 
 	return sysfs_emit(buffer, "%u\n", value);
 }
 
-static DEVICE_ATTR_RW(usb_charging);
+static DEVICE_ATTR_RW(usb_charge);
 
 
 /* Allow recording (allows or blocks access to camera and microphone) */
@@ -924,17 +746,156 @@ static ssize_t allow_recording_show(struct device *dev, struct device_attribute 
 static DEVICE_ATTR_RW(allow_recording);
 
 
+/* Dolby Atmos mode for speakers - needs further investigation */
+/*
+static bool dolby_atmos;
+
+static ssize_t dolby_atmos_store(struct device *dev, struct device_attribute *attr,
+				const char *buffer, size_t count)
+{
+	if (!count || kstrtobool(buffer, &dolby_atmos))
+		return -EINVAL;
+	return count;
+}
+
+static ssize_t dolby_atmos_show(struct device *dev, struct device_attribute *attr, char *buffer)
+{
+	return sysfs_emit(buffer, "%u\n", dolby_atmos);
+}
+
+static DEVICE_ATTR_RW(dolby_atmos);
+*/
+
+
 /* Add attributes to necessary groups etc */
 
 static struct attribute *galaxybook_attrs[] = {
-	&dev_attr_battery_saver_percent.attr,
-	/* &dev_attr_dolby_atmos.attr, */ /* removed pending further investigation */
 	&dev_attr_start_on_lid_open.attr,
-	&dev_attr_usb_charging.attr,
+	&dev_attr_usb_charge.attr,
 	&dev_attr_allow_recording.attr,
+	/* &dev_attr_dolby_atmos.attr, */ /* removed pending further investigation */
 	NULL
 };
 ATTRIBUTE_GROUPS(galaxybook);
+
+
+/* Battery Extension (adds charge_control_end_threshold to the battery device) */
+
+static int charge_control_end_threshold_acpi_set(struct samsung_galaxybook *galaxybook,
+				const u8 value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	if (value > 100)
+		return -EINVAL;
+
+	if (value == 100) {
+		pr_warn("setting battery charge_control_end_threshold to 100 " \
+				"will effectively just turn off charge control; value will be set to 0 (off)\n");
+	}
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_POWER_MANAGEMENT;
+	buf.gunm = GUNM_SET;
+	buf.guds[0] = 0xe9;
+	buf.guds[1] = 0x90;
+
+	buf.guds[2] = (value == 100 ? 0 : value);
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"setting battery charge_control_end_threshold", &buf);
+	if (err)
+		return err;
+
+	if (buf.guds[1] != 0x90 && buf.guds[2] != (value == 100 ? 0 : value)) {
+		pr_err("invalid response when setting charge_control_end_threshold; " \
+				"returned value was: 0x%02x 0x%02x\n",
+				buf.guds[1], buf.guds[2]);
+		return -EINVAL;
+	}
+
+	pr_info("set battery charge_control_end_threshold to %d\n", buf.guds[2]);
+
+	return 0;
+}
+
+static int charge_control_end_threshold_acpi_get(struct samsung_galaxybook *galaxybook, u8 *value)
+{
+	struct sawb buf = {0};
+	int err;
+
+	buf.safn = SAFN;
+	buf.sasb = SASB_POWER_MANAGEMENT;
+	buf.gunm = 0x82;
+	buf.guds[0] = 0xe9;
+	buf.guds[1] = 0x91;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+			"getting battery charge_control_end_threshold", &buf);
+	if (err)
+		return err;
+
+	*value = buf.guds[1];
+
+	if (debug) {
+		pr_warn("[DEBUG] battery charge control is currently %s; " \
+				"battery charge_control_end_threshold is %d\n",
+				(buf.guds[1] > 0 ? "on" : "off"), buf.guds[1]);
+	}
+
+	return 0;
+}
+
+static ssize_t charge_control_end_threshold_store(struct device *dev, struct device_attribute *attr,
+				const char *buffer, size_t count)
+{
+	u8 value;
+	int err;
+
+	if (!count || kstrtou8(buffer, 0, &value))
+		return -EINVAL;
+
+	err = charge_control_end_threshold_acpi_set(galaxybook_ptr, value);
+	if (err)
+		return err;
+
+	return count;
+}
+
+static ssize_t charge_control_end_threshold_show(struct device *dev, struct device_attribute *attr,
+				char *buffer)
+{
+	u8 value;
+	int err;
+
+	err = charge_control_end_threshold_acpi_get(galaxybook_ptr, &value);
+	if (err)
+		return err;
+
+	return sysfs_emit(buffer, "%d\n", value);
+}
+
+static DEVICE_ATTR_RW(charge_control_end_threshold);
+
+static int galaxybook_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
+{
+	if (device_create_file(&battery->dev, &dev_attr_charge_control_end_threshold))
+		return -ENODEV;
+	return 0;
+}
+
+static int galaxybook_battery_remove(struct power_supply *battery, struct acpi_battery_hook *hook)
+{
+	device_remove_file(&battery->dev, &dev_attr_charge_control_end_threshold);
+	return 0;
+}
+
+static struct acpi_battery_hook galaxybook_battery_hook = {
+	.add_battery = galaxybook_battery_add,
+	.remove_battery = galaxybook_battery_remove,
+	.name = "Samsung Galaxy Book Battery Extension",
+};
 
 
 /*
@@ -1149,6 +1110,12 @@ static int galaxybook_hwmon_init(struct samsung_galaxybook *galaxybook)
 	}
 
 	return ret;
+}
+
+static void galaxybook_hwmon_exit(struct samsung_galaxybook *galaxybook)
+{
+	if (galaxybook->hwmon)
+		hwmon_device_unregister(galaxybook->hwmon);
 }
 #endif
 
@@ -1367,6 +1334,8 @@ static int galaxybook_platform_probe(struct platform_device *pdev)
 			pr_warn("[DEBUG] received following device quirks:\n");
 			pr_warn("[DEBUG]   disable_kbd_backlight       = %s\n",
 					quirks->disable_kbd_backlight ? "true" : "false");
+			pr_warn("[DEBUG]   disable_battery_threshold   = %s\n",
+					quirks->disable_battery_threshold ? "true" : "false");
 			pr_warn("[DEBUG]   disable_performance_mode    = %s\n",
 					quirks->disable_performance_mode ? "true" : "false");
 			pr_warn("[DEBUG]   disable_fan_speed           = %s\n",
@@ -1380,6 +1349,8 @@ static int galaxybook_platform_probe(struct platform_device *pdev)
 		}
 		if (quirks->disable_kbd_backlight && !kbd_backlight_was_set)
 			kbd_backlight = false;
+		if (quirks->disable_battery_threshold && !battery_threshold_was_set)
+			battery_threshold = false;
 		if (quirks->disable_performance_mode && !performance_mode_was_set)
 			performance_mode = false;
 		if (quirks->disable_fan_speed && !fan_speed_was_set)
@@ -1561,7 +1532,7 @@ static int galaxybook_input_init(struct samsung_galaxybook *galaxybook)
 	if (!input)
 		return -ENOMEM;
 
-	input->name = "Samsung Galaxybook extra buttons";
+	input->name = "Samsung Galaxy Book extra buttons";
 	input->phys = SAMSUNG_GALAXYBOOK_CLASS "/input0";
 	input->id.bustype = BUS_HOST;
 	input->dev.parent = &galaxybook->platform->dev;
@@ -1727,24 +1698,31 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 
 	pr_info("initializing ACPI device\n");
 	err = galaxybook_acpi_init(galaxybook);
-	if (err)
+	if (err) {
+		pr_err("failure initializing ACPI device\n");
 		goto err_free;
+	}
 
 	pr_info("initializing platform device\n");
 	err = galaxybook_platform_init(galaxybook);
-	if (err)
+	if (err) {
+		pr_err("failure initializing platform device\n");
 		goto err_acpi_exit;
+	}
 
 	if (performance_mode) {
 		pr_info("initializing performance_mode\n");
 		err = galaxybook_performance_mode_init(galaxybook);
-		if (err)
+		if (err) {
+			pr_err("failure initializing performance_mode");
 			goto err_platform_exit;
-
+		}
 		pr_info("initializing platform profile\n");
 		err = galaxybook_profile_init(galaxybook);
-		if (err)
+		if (err) {
+			pr_err("failure initializing platform profile");
 			goto err_platform_exit;
+		}
 	} else {
 		pr_warn("performance_mode is disabled\n");
 	}
@@ -1752,23 +1730,37 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (kbd_backlight) {
 		pr_info("initializing kbd_backlight\n");
 		err = galaxybook_kbd_backlight_init(galaxybook);
-		if (err)
-			goto err_profile_exit;
+		if (err) {
+			pr_err("failure initializing kbd_backlight");
+			goto err_performance_mode_exit;
+		}
 	} else {
 		pr_warn("kbd_backlight is disabled\n");
 	}
 
+	if (battery_threshold) {
+		pr_info("initializing battery charge threshold control\n");
+		battery_hook_register(&galaxybook_battery_hook);
+	} else {
+		pr_warn("battery_threshold is disabled\n");
+	}
+
 	if (i8042_filter) {
+		pr_info("installing i8402 key filter to capture hotkey input\n");
+
 		/* initialize hotkey work queues */
 		INIT_WORK(&galaxybook->kbd_backlight_hotkey_work,
 				galaxybook_kbd_backlight_hotkey_work);
 		INIT_WORK(&galaxybook->allow_recording_hotkey_work,
 				galaxybook_allow_recording_hotkey_work);
 
-		pr_info("installing i8402 key filter to capture hotkey input\n");
 		err = i8042_install_filter(galaxybook_i8042_filter);
-		if (err)
-			pr_err("Unable to install key filter\n");
+		if (err) {
+			pr_err("failure installing i8402 key filter\n");
+			cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
+			cancel_work_sync(&galaxybook->allow_recording_hotkey_work);
+			goto err_battery_threshold_exit;
+		}
 	} else {
 		pr_warn("i8042_filter is disabled\n");
 	}
@@ -1776,14 +1768,19 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (fan_speed) {
 		pr_info("initializing fan speed\n");
 		err = galaxybook_fan_speed_init(galaxybook);
-		if (err)
-			pr_err("Unable to initialize fan speed\n");
+		if (err) {
+			pr_err("failure initializing fan speed\n");
+			goto err_i8042_filter_exit;
+		}
 
 #if IS_ENABLED(CONFIG_HWMON)
 		pr_info("initializing hwmon device\n");
 		err = galaxybook_hwmon_init(galaxybook);
-		if (err)
-			pr_err("Unable to initialize hwmon device\n");
+		if (err) {
+			pr_err("failure initializing hwmon device\n");
+			galaxybook_fan_speed_exit(galaxybook);
+			goto err_i8042_filter_exit;
+		}
 #endif
 	} else {
 		pr_warn("fan_speed is disabled\n");
@@ -1792,19 +1789,23 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (acpi_hotkeys) {
 		pr_info("enabling ACPI notifications\n");
 		err = galaxybook_enable_acpi_notify(galaxybook);
-		if (err)
-			pr_err("Unable to enable ACPI notifications\n");
-
-		pr_info("initializing hotkey input device\n");
-		err = galaxybook_input_init(galaxybook);
 		if (err) {
-			pr_err("Unable to initialize hotkey input device\n");
-			galaxybook_input_exit(galaxybook);
+			pr_err("failure enabling ACPI notifications\n");
+			goto err_fan_speed_exit;
 		}
 
 		/* initialize hotkey work queues */
 		INIT_WORK(&galaxybook->performance_mode_hotkey_work,
 				galaxybook_performance_mode_hotkey_work);
+
+		pr_info("initializing hotkey input device\n");
+		err = galaxybook_input_init(galaxybook);
+		if (err) {
+			pr_err("failure initializing hotkey input device\n");
+			cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
+			galaxybook_input_exit(galaxybook);
+			goto err_fan_speed_exit;
+		}
 	} else {
 		pr_warn("acpi_hotkeys is disabled\n");
 	}
@@ -1812,21 +1813,46 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (wmi_hotkeys) {
 		pr_info("enabling WMI notifications\n");
 		err = galaxybook_wmi_init();
-		if (err)
-			pr_err("Unable to enable WMI notifications\n");
+		if (err) {
+			pr_err("failure enabling WMI notifications\n");
+			goto err_acpi_hotkeys_exit;
+		}
 	} else {
 		pr_warn("wmi_hotkeys is disabled\n");
 	}
-
-	battery_hook_register(&battery_hook);
 
 	/* set galaxybook_ptr reference so it can be used by hotkeys */
 	galaxybook_ptr = galaxybook;
 
 	return 0;
 
-err_profile_exit:
-	galaxybook_profile_exit(galaxybook);
+err_acpi_hotkeys_exit:
+	if (acpi_hotkeys) {
+		galaxybook_input_exit(galaxybook);
+		cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
+	}
+err_fan_speed_exit:
+	if (fan_speed) {
+		galaxybook_fan_speed_exit(galaxybook);
+#if IS_ENABLED(CONFIG_HWMON)
+		galaxybook_hwmon_exit(galaxybook);
+#endif
+	}
+err_i8042_filter_exit:
+	if (i8042_filter) {
+		i8042_remove_filter(galaxybook_i8042_filter);
+		cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
+		cancel_work_sync(&galaxybook->allow_recording_hotkey_work);
+	}
+err_battery_threshold_exit:
+	if (battery_threshold)
+		battery_hook_unregister(&galaxybook_battery_hook);
+	/* including kbd_backlight exit here as there is not exit within init of battery_threshold */
+	if (kbd_backlight)
+		galaxybook_kbd_backlight_exit(galaxybook);
+err_performance_mode_exit:
+	if (performance_mode)
+		galaxybook_profile_exit(galaxybook);
 err_platform_exit:
 	galaxybook_platform_exit(galaxybook);
 err_acpi_exit:
@@ -1840,8 +1866,6 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 {
 	struct samsung_galaxybook *galaxybook = acpi_driver_data(device);
 
-	battery_hook_unregister(&battery_hook);
-
 	if (wmi_hotkeys)
 		galaxybook_wmi_exit();
 
@@ -1850,17 +1874,24 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 		cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
 	}
 
+	if (fan_speed) {
+		galaxybook_fan_speed_exit(galaxybook);
+#if IS_ENABLED(CONFIG_HWMON)
+		galaxybook_hwmon_exit(galaxybook);
+#endif
+	}
+
 	if (i8042_filter) {
 		i8042_remove_filter(galaxybook_i8042_filter);
 		cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
 		cancel_work_sync(&galaxybook->allow_recording_hotkey_work);
 	}
 
+	if (battery_threshold)
+		battery_hook_unregister(&galaxybook_battery_hook);
+
 	if (kbd_backlight)
 		galaxybook_kbd_backlight_exit(galaxybook);
-
-	if (fan_speed)
-		galaxybook_fan_speed_exit(galaxybook);
 
 	if (performance_mode)
 		galaxybook_profile_exit(galaxybook);
@@ -1928,6 +1959,6 @@ static void __exit samsung_galaxybook_exit(void)
 module_init(samsung_galaxybook_init);
 module_exit(samsung_galaxybook_exit);
 
-MODULE_AUTHOR("Joshua Grisham");
+MODULE_AUTHOR("Joshua Grisham, Giulio Girardi");
 MODULE_DESCRIPTION(SAMSUNG_GALAXYBOOK_NAME);
 MODULE_LICENSE("GPL");

@@ -1,6 +1,6 @@
-# Samsung Galaxybook Extras ⚠️(WIP)⚠️
+# Samsung Galaxy Book Extras ⚠️(WIP)⚠️
 
-Samsung Galaxybook Extras Linux platform driver and accompanying systemd hwdb mappings.
+Samsung Galaxy Book series extras Linux platform driver and accompanying systemd hwdb mappings.
 
 Current status: ⚠️ **WIP but nearing readiness for mainline** ⚠️ (use at your own risk!)
 
@@ -49,6 +49,7 @@ If you have a device with `SAM0427` and wish to help provide support to overcome
 The platform driver supports the following module parameters:
 
 - `kbd_backlight`: Enable Keyboard Backlight control (default on) (bool)
+- `battery_threshold`: Enable battery charge threshold control (default on) (bool)
 - `performance_mode`: Enable Performance Mode control (default on) (bool)
 - `fan_speed`: Enable fan speed (default on) (bool)
 - `i8042_filter`: Enable capturing keyboard hotkey events (default on) (bool)
@@ -56,7 +57,7 @@ The platform driver supports the following module parameters:
 - `wmi_hotkeys`: Enable WMI hotkey events (default on) (bool)
 - `debug`: Enable debug messages (default off) (bool)
 
-In general the intention of these parameters is to allow for enabling or disabling of various features provided by the driver, especially in cases where a particular feature does not appear to work with your device. The availability of the various "settings" flags (`battery_saver_percent`, `start_on_lid_open`, etc) will always be enabled and cannot be disabled at this time.
+In general the intention of these parameters is to allow for enabling or disabling of various features provided by the driver, especially in cases where a particular feature does not appear to work with your device. The availability of the various "settings" flags (`usb_charge`, `start_on_lid_open`, etc) will always be enabled and cannot be disabled at this time.
 
 > **Note:** Please raise an issue if you find that you need to disable a certain feature in order to avoid a problem that it causes with your device!
 
@@ -111,11 +112,11 @@ sudo modprobe samsung-galaxybook debug=true
 
 #### Enable or disable features using parameters
 
-The module parameters can be used to enable or disable most features. For example, the following would reload the module with only the core settings flags (`battery_saver_percent`, `start_on_lid_open`, etc) and the kbd_backlight LED class, and all other features would be disabled:
+The module parameters can be used to enable or disable most features. For example, the following would reload the module with only the core settings flags (`usb_charge`, `start_on_lid_open`, etc) and the kbd_backlight LED class, and all other features would be disabled:
 
 ```sh
 sudo rmmod samsung-galaxybook
-sudo modprobe samsung-galaxybook debug=false kbd_backlight=on performance_mode=off fan_speed=off i8042_filter=off acpi_hotkeys=off wmi_hotkeys=off
+sudo modprobe samsung-galaxybook debug=false kbd_backlight=on battery_threshold=off performance_mode=off fan_speed=off i8042_filter=off acpi_hotkeys=off wmi_hotkeys=off
 ```
 
 Note that these can also be added to the boot parameters (e.g. `samsung_galaxybook.fan_speed=off`).
@@ -148,7 +149,7 @@ The hotkey should also trigger the hardware changed event for the LED, which in 
 
 The performance mode hotkey will also cycle through all available platform profiles in a round-robin manner (low-power, quiet, balanced, performance, low-power, quiet, ...).
 
-There is currently no OSD popup but the event can be captured from the "Samsung Galaxybook extra buttons" input device if desired.
+There is currently no OSD popup but the event can be captured from the "Samsung Galaxy Book extra buttons" input device if desired.
 
 ### Keyboard backlight
 
@@ -160,26 +161,28 @@ Note that the setting "automatically turn off the keyboard backlight after X sec
 
 Also note that most of these devices have an ambient light sensor which also affects the keyboard backlight. This behavior is not possible to control in Windows and I have not yet found anything in the ACPI that seems to be able to disable this feature. What this means is that sometimes you might think that the keyboard backlight is just randomly turning off or has stopped working, but the reality is that it is turning off due to this ambient light sensor. One way to test when this happens (to be sure that it is in fact the ambient light sensor which has caused the keyboard backlight to turn off) is to just cover the sensor somehow (with your finger, for example), and see if the lights come back on.
 
-### Battery saver percent
+### Battery charge control threshold
 
-The "Battery saver" feature will stop the battery charging at a given percentage. If the user wishes to maintain interoperability with Windows, then they should set the value to 80 to represent "on", or 0 to represent "off", as these are the values recognized by the various Windows-based Samsung applications and services as "on" or "off". Otherwise, the device will accept any value between 0 (off) and 99 as a percentage that you wish the battery to stop charging at. If you try to set a value of 100, the driver will also accept this input, but just set the attribute value to 0 (i.e. 100% is interpreted as "turn battery saver off").
+This platform driver will add setting the battery charge control end threshold, but does not have access to set the start threshold. This feature is typically called "battery saver" by the various Samsung applications in Windows, but in Linux we will implement the standard attributes added to the battery device that are recognized by UPower.
 
-There is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/battery_saver_percent` which can be read from or written to.
+If the user wishes to maintain interoperability with Windows, then they should set the value to 80 to represent "on", or 0 to represent "off", as these are the values recognized by the various Windows-based Samsung applications and services as "on" or "off". Otherwise, the device will accept any value between 0 (off) and 99 as a percentage that you wish the battery to stop charging at. If you try to set a value of 100, the driver will also accept this input, but just set the attribute value to 0 (i.e. 100% is interpreted as "turn battery saver off").
+
+There is a new device attribute created at `/sys/class/power_supply/BAT1/charge_control_end_threshold` which can be read from or written to.
 
 ```sh
 # read current value (percentage the battery will stop charging)
-cat /sys/devices/platform/samsung-galaxybook/battery_saver_percent
+cat /sys/class/power_supply/BAT1/charge_control_end_threshold
 
 # turn on and set to 80%
-echo 80 | sudo tee /sys/devices/platform/samsung-galaxybook/battery_saver_percent
+echo 80 | sudo tee /sys/class/power_supply/BAT1/charge_control_end_threshold
 
-# turn off battery saver so that charging will not be stopped before 100%
-echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/battery_saver_percent
+# turn off charge control threshold so that charging will not be stopped before 100%
+echo 0 | sudo tee /sys/class/power_supply/BAT1/charge_control_end_threshold
 ```
 
-> **Note:** I have noticed that if you are currently plugged while the battery is already sitting at the desired `battery_saver_percent`, then turn off this feature (i.e. you wish to charge fully to 100% so you set the value to 0), charging does not seem to start automatically. It may be necessary to disconnect and reconnect the charging cable in this case. The Windows driver seems to be doing some hocus-pocus with the ACPI battery device that I have not quite sorted out yet; I am assuming this is how they made it work more seamlessly in Windows?
+> **Note:** I have noticed that if you are currently plugged while the battery is already sitting at the desired `charge_control_end_threshold`, then turn off this feature (i.e. you wish to charge fully to 100% so you set the value to 0), charging does not seem to start automatically. It may be necessary to disconnect and reconnect the charging cable in this case. The Windows driver seems to be doing some hocus-pocus with the ACPI battery device that I have not quite sorted out yet; I am assuming this is how they made it work more seamlessly in Windows?
 
-There is also an input event sent to the standard keyboard and ACPI device which is generated when battery saver is enabled and charging reaches the desired `battery_saver_percent`; the input has been mapped to the `BATTERY` event so that notifications can be displayed (see below in the keyboard remapping section for additional information on this).
+There is also an input event sent to the standard keyboard and ACPI device which is generated when charge control is enabled and charging reaches the desired `charge_control_end_threshold`; the event has been mapped to the `BATTERY` event so that notifications can be displayed (see below in the keyboard remapping section for additional information on this).
 
 ### Start on lid open
 
@@ -196,19 +199,19 @@ echo true | sudo tee /sys/devices/platform/samsung-galaxybook/start_on_lid_open
 echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/start_on_lid_open
 ```
 
-### USB Charging mode
+### USB Charge mode
 
-To turn on or off the "USB Charging" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/usb_charging` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "USB Charge" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/usb_charge` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/devices/platform/samsung-galaxybook/usb_charging
+cat /sys/devices/platform/samsung-galaxybook/usb_charge
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charging
+echo true | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charge
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charging
+echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charge
 ```
 
 My own observations on how this feature appears to work (which has nothing to do with this driver itself, actually):
@@ -329,7 +332,7 @@ sudo udevadm trigger
 
 Currently, these keyboard mapping rules should apply to all Galaxy Book2 and Book3 series notebooks by matching on an "svn" starting with "Samsung" (case insensitve) plus a "pn" string of three digits followed by any one of the following suffixes:
 
-- 'QDB' (Galaxy Book 360 series)
+- `QDB` (Galaxy Book 360 series)
 - `XED` (Galaxy Book2 series)
 - `QED` (Galaxy Book2 360 series)
 - `XFG` (Galaxy Book3 series)
