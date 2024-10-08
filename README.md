@@ -1,6 +1,6 @@
 # Samsung Galaxy Book Extras ⚠️(WIP)⚠️
 
-Samsung Galaxy Book series extras Linux platform driver and accompanying systemd hwdb mappings.
+Samsung Galaxy Book series extras Linux platform driver.
 
 Current status: ⚠️ **WIP but nearing readiness for mainline** ⚠️ (use at your own risk!)
 
@@ -312,15 +312,9 @@ Subjectively, I do feel like I experienced that the fan volume was quite a bit l
 
 ## Keyboard scancode remapping
 
-The provided file [61-keyboard-samsung-galaxybook.hwdb](./61-keyboard-samsung-galaxybook.hwdb) will correct some keyboard mappings as follows:
+The provided file [61-keyboard-samsung-galaxybook.hwdb](./61-keyboard-samsung-galaxybook.hwdb) is a copy of the relevant section for these devices from the latest [60-keyboard.hwdb](https://github.com/systemd/systemd/blob/main/hwdb.d/60-keyboard.hwdb) which can be used with older versions of systemd. See [systemd/issues/34646](https://github.com/systemd/systemd/issues/34646) and [systemd/pull/34648](https://github.com/systemd/systemd/pull/34648) for additional information.
 
-- The "Samsung Settings" key (Fn+F1) is mapped to `config` which seem to automatically launch `gnome-control-center` and I assume might work for other desktop environments? Otherwise a shortcut can be created in your own environment to this key. Without this remapping (including the synthetic release event), the key seems to behave very erratically in Linux, as it seems to send the "plusminus" key non-stop without releasing (sometimes you can "stop" this by pressing Esc, while other times you just have to reboot!).
-- The "Touchpad" key (Fn+F5) is mapped to `F21` as this is typically recognized in Linux as the touchpad toggle key (tested as working in GNOME 45.x)
-- The "Keyboard backlight brightness" key (Fn+F9) is a multi-level toggle key which does not work in the same way as the standard on/off toggle or up+down keys which are typically available. This key is actually handled by the `samsung-galaxybook` platform driver, so this systemd mapping just causes the keyboard key to be ignored.
-- The "Blocking Recording mode" key (Fn+F10) is also handled by the `samsung-galaxybook` platform driver, so it will also be ignored.
-- The "Fn Lock" key (Fn+F12) generates two different events: one when it is turned "on", and a different one when it is turned "off". These are handled by the firmware so this systemd mapping just causes them to be ignored.
-- If you have set a `charge_control_end_threshold`, when the battery charge reaches the desired percentage and stops then an input event is automatically generated to the standard keyboard device. This event I have mapped to `battery` so that it will display standard noitifcations but can also be mapped to a custom keyboard shortcut.
-- The "Performance mode" key (Fn+F11) comes as an ACPI notification and is handled by the `samsung-galaxybook` platform driver.
+> Note: The "Performance mode" key (Fn+F11) comes as an ACPI notification and is handled by the `samsung-galaxybook` platform driver.
 
 You can install this mapping file as follows:
 
@@ -329,40 +323,3 @@ sudo cp 61-keyboard-samsung-galaxybook.hwdb /etc/udev/hwdb.d/
 sudo systemd-hwdb update
 sudo udevadm trigger
 ```
-
-### Matching additional device keyboards
-
-The keyboard mapping rules should apply to any Samsung device that has the value `SCAI` as part of its `sku` DMI field. You can check if your device includes the value `SCAI` as part of its SKU number string by running `sudo dmidecode --type 1`.
-
-This should include most if not all of the Samsung Galaxy Book series notebooks, plus any others that likely would be able to use this platform driver (as `SCAI` is in fact the ID for the ACPI device that this driver uses, so the working theory and as has been shown by testing and feedback is that they will all be following very similar keyboard mappings).
-
-In case you have issues where the mapping does not seem to be picked up on your device, then we might need to modify the filter string. You can get your own device's evdev dmi string like this:
-
-```sh
-sudo evemu-describe
-```
-
-Select the device for your "regular" keyboard (e.g. "/dev/input/event2: AT Translated Set 2 keyboard") and then you should see the full DMI string for your keyboard, like this:
-
-```sh
-# EVEMU 1.3
-# Kernel: 6.5.0-13-generic
-# DMI: dmi:bvnAmericanMegatrendsInternational,LLC.:bvrP11RGF.057.230404.ZQ:bd04/04/2023:br5.25:svnSAMSUNGELECTRONICSCO.,LTD.:pn950XED:pvrP11RGF:rvnSAMSUNGELECTRONICSCO.,LTD.:rnNP950XED-KA2SE:rvrSGLB208A0U-C01-G001-S0001+10.0.22000:cvnSAMSUNGELECTRONICSCO.,LTD.:ct10:cvrN/A:skuSCAI-ICPS-A5A5-ADLP-PRGF:
-# Input device name: "AT Translated Set 2 keyboard"
-# Input device ID: bus 0x11 vendor 0x01 product 0x01 version 0xab41
-# ...
-# Properties:
-N: AT Translated Set 2 keyboard
-I: 0011 0001 0001 ab41
-```
-
-The filter string in the hwdb file will need to modified so that it also matches your device. If you wish then you can create an issue here with the output of your `evemu-describe` and I can try to modify the file for you.
-
-Otherwise, feel free to test yourself by modifying `/etc/udev/hwdb.d/61-keyboard-samsung-galaxybook.hwdb` and either restart or reload udev as follows:
-
-```sh
-sudo systemd-hwdb update
-sudo udevadm trigger
-```
-
-Once we can put together a more definitive filter that supports more devices then I think it would make sense to ask for this keyboard mapping to get moved to systemd upstream. See: <https://github.com/systemd/systemd/blob/main/hwdb.d/60-keyboard.hwdb>
