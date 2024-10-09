@@ -22,7 +22,7 @@ The following features are currently implemented:
 
 - Support for hotkey handling
 - Keyboard backlight
-- Battery saver percent (stop charging battery at given percentage value)
+- Battery charge end threshold control (stop charging battery at given percentage value) implemented as a battery device extension
 - Start device automatically when opening lid
 - USB ports provide charging when device is turned off
 - Toggle to allow or block recording from the built-in camera and microphone
@@ -32,6 +32,7 @@ The following features are currently implemented:
 The following features might be possible to implement but require  additional debugging and development:
 
 - "Dolby Atmos" mode for the speakers
+- "Outdoor Mode" for increasing screen brightness on models with `SAM0427`
 
 ### Supported devices
 
@@ -78,7 +79,7 @@ sudo make -C /lib/modules/`uname -r`/build M=$PWD modules_install
 sudo depmod
 ```
 
-> *Note:* if you wish to enable `debug` by default then you can add `samsung_galaxybook.debug=true` to your boot parameters.
+> **Note:** if you wish to enable `debug` by default then you can add `samsung_galaxybook.debug=true` to your boot parameters.
 
 Load the module (including enabling debugging messages):
 
@@ -133,7 +134,7 @@ One general observation that I have made is that there are in fact quite a lot o
 
 It would be great if we could actually get some help from Samsung regarding this!
 
-### Hotkeys
+### Keyboard Hotkeys
 
 Samsung have decided to use the main keyboard device to also send most of the hotkey events. If the driver wishes to capture and act on these hotkeys, then we will have to do something like using a i8402 filter to "catch" the key events.
 
@@ -147,11 +148,25 @@ The action will be triggered on keyup of the hotkey as the event reported by key
 
 The hotkey should also trigger the hardware changed event for the LED, which in GNOME (and likely others) automatically displays a nice OSD popup with the correct baclight level displayed.
 
+#### Block recording hotkey (Fn+F10)
+
+The block recording hotkey will toggle the `allow_recording` feature, which blocks access to the built-in camera and microphone.
+
 #### Performance mode hotkey (Fn+F11)
 
 The performance mode hotkey will also cycle through all available platform profiles in a round-robin manner (low-power, quiet, balanced, performance, low-power, quiet, ...).
 
 There is currently no OSD popup but the event can be captured from the "Samsung Galaxy Book extra buttons" input device if desired.
+
+### Notifications
+
+There is a new input device created "Samsung Galaxy Book extra buttons" which will send input events for a few notifications from the ACPI device:
+
+- Notification when the battery charge control threshold has been reached (and the "battery saver" feature stops charging the battery)
+- "Performance Mode" hotkey (Fn+F11) was pressed on the keyboard
+- Notification when the device has been placed on a table (support suspected for `SAM0428` models only)
+- Notification when the device has been lifted from a table (support suspected for `SAM0428` models only)
+
 
 ### Keyboard backlight
 
@@ -314,7 +329,7 @@ Subjectively, I do feel like I experienced that the fan volume was quite a bit l
 
 The provided file [61-keyboard-samsung-galaxybook.hwdb](./61-keyboard-samsung-galaxybook.hwdb) is a copy of the relevant section for these devices from the latest [60-keyboard.hwdb](https://github.com/systemd/systemd/blob/main/hwdb.d/60-keyboard.hwdb) which can be used with older versions of systemd. See [systemd/issues/34646](https://github.com/systemd/systemd/issues/34646) and [systemd/pull/34648](https://github.com/systemd/systemd/pull/34648) for additional information.
 
-> Note: The "Performance mode" key (Fn+F11) comes as an ACPI notification and is handled by the `samsung-galaxybook` platform driver.
+> **Note:** The "Performance mode" key (Fn+F11) comes as an ACPI notification and is handled by the `samsung-galaxybook` platform driver.
 
 You can install this mapping file as follows:
 
