@@ -287,23 +287,20 @@ sensors
 
 ### Performance mode
 
-To modify the "performance mode", the driver implements the [`platform_profile` interface](https://www.kernel.org/doc/html/latest/userspace-api/sysfs-platform_profile.html). The following strings can be written to `/sys/firmware/acpi/platform_profile` to set the performance mode:
+To modify the "performance mode", the driver implements the [`platform_profile` interface](https://www.kernel.org/doc/html/latest/userspace-api/sysfs-platform_profile.html). Mapping of Samsung's "Performance modes" to their respective platform profile is done dynamically based on a mapping in the driver code which reads in what modes are reported as supported by the ACPI. Preference is given to try and map `low-power`, `balanced`, and `performance` profiles, as these seem to be the most common profiles utilized (and sometimes even required) by various userspace tools.
 
-- `low-power` (Silent)
-- `quiet` (Quiet)
-- `balanced` (Optimized, default value if not set)
-- `performance` (Performance)
+The result of the mapping will be printed in the Kernel log when the module is loading. Supported profiles can then be retrieved from `/sys/firmware/acpi/platform_profile_choices`, while `/sys/firmware/acpi/platform_profile` can be used to read or write the desired profile.
 
 Examples:
 
 ```sh
-# Get supported performance modes
+# Get supported platform profiles
 cat /sys/firmware/acpi/platform_profile_choices
 
-# set performance_mode to low-power
+# set platform profile to low-power
 echo low-power | sudo tee /sys/firmware/acpi/platform_profile
 
-# get current performance_mode
+# get current platform profile
 cat /sys/firmware/acpi/platform_profile
 ```
 

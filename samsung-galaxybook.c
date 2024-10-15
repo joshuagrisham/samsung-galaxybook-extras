@@ -112,29 +112,6 @@ MODULE_PARM_DESC(debug, "Enable debug messages (default off)");
  * Device definitions, matching, and quirks
  */
 
-#define PERFORMANCE_MODE_COUNT 4
-
-typedef enum {
-	PERFORMANCE_MODE_OPTIMIZED,
-	PERFORMANCE_MODE_QUIET,
-	PERFORMANCE_MODE_SILENT,
-	PERFORMANCE_MODE_PERFORMANCE,
-} galaxybook_performance_mode;
-
-static const char * const performance_mode_names[] = {
-	[PERFORMANCE_MODE_OPTIMIZED] = "optimized",
-	[PERFORMANCE_MODE_QUIET] = "quiet",
-	[PERFORMANCE_MODE_SILENT] = "silent",
-	[PERFORMANCE_MODE_PERFORMANCE] = "performance",
-};
-
-static u8 performance_modes[] = {
-	[PERFORMANCE_MODE_OPTIMIZED] = 0x0,
-	[PERFORMANCE_MODE_QUIET] = 0xa,
-	[PERFORMANCE_MODE_SILENT] = 0xb,
-	[PERFORMANCE_MODE_PERFORMANCE] = 0x1,
-};
-
 struct galaxybook_device_quirks {
 	bool disable_kbd_backlight;
 	bool disable_battery_threshold;
@@ -143,7 +120,6 @@ struct galaxybook_device_quirks {
 	bool disable_i8042_filter;
 	bool disable_acpi_hotkeys;
 	bool disable_wmi_hotkeys;
-	u8 *performance_modes;
 };
 
 static const struct galaxybook_device_quirks sam0427_quirks = {
@@ -152,19 +128,10 @@ static const struct galaxybook_device_quirks sam0427_quirks = {
 	.disable_i8042_filter = true,
 };
 
-static const struct galaxybook_device_quirks sam0429_quirks = {
-	.performance_modes = (u8[]){
-		[PERFORMANCE_MODE_OPTIMIZED] = 0x2,
-		[PERFORMANCE_MODE_QUIET] = 0xa,
-		[PERFORMANCE_MODE_SILENT] = 0xb,
-		[PERFORMANCE_MODE_PERFORMANCE] = 0x15,
-	},
-};
-
 static const struct acpi_device_id galaxybook_device_ids[] = {
 	{ "SAM0427", (unsigned long)&sam0427_quirks },
 	{ "SAM0428" },
-	{ "SAM0429", (unsigned long)&sam0429_quirks },
+	{ "SAM0429" },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, galaxybook_device_ids);
@@ -189,6 +156,7 @@ struct samsung_galaxybook {
 	struct input_dev *input;
 	struct key_entry *keymap;
 
+	u8 *profile_performance_modes;
 	struct platform_profile_handler profile_handler;
 	struct work_struct performance_mode_hotkey_work;
 
@@ -253,6 +221,10 @@ struct sawb {
 			u8 iob7;
 			u8 iob8;
 			u8 iob9;
+		};
+		struct {
+			u8 iob_prefix[18];
+			u8 iob_values[10];
 		};
 	};
 };
@@ -957,7 +929,8 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 		goto out_free;
 	}
 
-	/* fan_speeds[] starts with a hard-coded 0 (fan is off), then has some "funny" logic:
+	/* 
+	 * fan_speeds[] starts with a hard-coded 0 (fan is off), then has some "funny" logic:
 	 *  - fetch the speed level values read in from FANT and add 0x0a to each value
 	 *  - _FST method in the DSDT seems to indicate that level 3 and 4 should have the same value,
 	 *    however real-life observation suggests that the speed actually does change
@@ -987,8 +960,7 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 		galaxybook->fan_speeds_count++;
 	}
 
-	/* add the missing last level speed where we "guess" it is 1000 RPM faster than the highest
-	   level fetched from FANT */
+	/* add the missing final level where we "guess" 1000 RPM faster than highest from FANT */
 	if (galaxybook->fan_speeds_count > 1) {
 		galaxybook->fan_speeds[i] = galaxybook->fan_speeds[i-1] + 1000;
 		galaxybook->fan_speeds_count++;
@@ -1124,51 +1096,8 @@ static void galaxybook_hwmon_exit(struct samsung_galaxybook *galaxybook)
  * Platform Profile / Performance mode
  */
 
-static galaxybook_performance_mode profile_to_performance_mode(
-				const enum platform_profile_option profile)
-{
-	/* Map all the profiles even though we will mark only some of them as supported */
-	switch (profile) {
-	case PLATFORM_PROFILE_LOW_POWER:
-		return PERFORMANCE_MODE_SILENT;
-	case PLATFORM_PROFILE_COOL:
-	case PLATFORM_PROFILE_QUIET:
-		return PERFORMANCE_MODE_QUIET;
-	case PLATFORM_PROFILE_PERFORMANCE:
-		return PERFORMANCE_MODE_PERFORMANCE;
-	case PLATFORM_PROFILE_BALANCED:
-	case PLATFORM_PROFILE_BALANCED_PERFORMANCE:
-	default:
-		return PERFORMANCE_MODE_OPTIMIZED;
-	}
-}
-
-static enum platform_profile_option performance_mode_to_profile(
-				const galaxybook_performance_mode mode)
-{
-	switch (mode) {
-	case PERFORMANCE_MODE_SILENT:
-		return PLATFORM_PROFILE_LOW_POWER;
-	case PERFORMANCE_MODE_QUIET:
-		return PLATFORM_PROFILE_QUIET;
-	case PERFORMANCE_MODE_PERFORMANCE:
-		return PLATFORM_PROFILE_PERFORMANCE;
-	default:
-		return PLATFORM_PROFILE_BALANCED;
-	}
-}
-
-static galaxybook_performance_mode performance_mode_lookup_by_value(
-				struct samsung_galaxybook *galaxybook, const u8 value)
-{
-	for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++)
-		if (performance_modes[i] == value)
-			return i;
-	return -1;
-}
-
 static int performance_mode_acpi_set(struct samsung_galaxybook *galaxybook,
-				const galaxybook_performance_mode performance_mode)
+				const u8 performance_mode)
 {
 	struct sawb buf = {0};
 	int err;
@@ -1178,21 +1107,17 @@ static int performance_mode_acpi_set(struct samsung_galaxybook *galaxybook,
 	export_guid(buf.caid, &PERFORMANCE_MODE_GUID);
 	buf.fncn = 0x51;
 	buf.subn = 0x03;
-	buf.iob0 = performance_modes[performance_mode];
+	buf.iob0 = performance_mode;
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &buf,
 			SAWB_LEN_PERFORMANCE_MODE, "setting performance_mode", &buf);
 	if (err)
 		return err;
 
-	pr_info("set performance_mode to '%s' (0x%02x)\n", performance_mode_names[performance_mode],
-			performance_modes[performance_mode]);
-
 	return 0;
 }
 
-static int performance_mode_acpi_get(struct samsung_galaxybook *galaxybook,
-				galaxybook_performance_mode *performance_mode)
+static int performance_mode_acpi_get(struct samsung_galaxybook *galaxybook, u8 *performance_mode)
 {
 	struct sawb buf = {0};
 	int err;
@@ -1208,25 +1133,45 @@ static int performance_mode_acpi_get(struct samsung_galaxybook *galaxybook,
 	if (err)
 		return err;
 
-	*performance_mode = performance_mode_lookup_by_value(galaxybook, buf.iob0);
-	if (*performance_mode == -1)
-		return -EINVAL;
-
-	if (debug)
-		pr_warn("[DEBUG] performance_mode is currently '%s' (0x%02x)\n",
-			performance_mode_names[*performance_mode], buf.iob0);
+	*performance_mode = buf.iob0;
 
 	return 0;
 }
+
+static enum platform_profile_option profile_performance_mode(
+				struct samsung_galaxybook *galaxybook, const u8 performance_mode)
+{
+	for (int i = 0; i < PLATFORM_PROFILE_LAST; i++)
+		if (galaxybook->profile_performance_modes[i] == performance_mode)
+			return i;
+	return -1;
+}
+
+/* copied from platform_profile.c; better if this could be fetched from a public function, maybe? */
+static const char * const profile_names[] = {
+	[PLATFORM_PROFILE_LOW_POWER] = "low-power",
+	[PLATFORM_PROFILE_COOL] = "cool",
+	[PLATFORM_PROFILE_QUIET] = "quiet",
+	[PLATFORM_PROFILE_BALANCED] = "balanced",
+	[PLATFORM_PROFILE_BALANCED_PERFORMANCE] = "balanced-performance",
+	[PLATFORM_PROFILE_PERFORMANCE] = "performance",
+};
+static_assert(ARRAY_SIZE(profile_names) == PLATFORM_PROFILE_LAST);
 
 static int galaxybook_platform_profile_set(struct platform_profile_handler *pprof,
 				enum platform_profile_option profile)
 {
 	struct samsung_galaxybook *galaxybook = container_of(pprof,
 			struct samsung_galaxybook, profile_handler);
-	galaxybook_performance_mode performance_mode = profile_to_performance_mode(profile);
+	int err;
 
-	return performance_mode_acpi_set(galaxybook, performance_mode);
+	err = performance_mode_acpi_set(galaxybook, galaxybook->profile_performance_modes[profile]);
+	if (err)
+		return err;
+
+	pr_info("set platform profile to '%s' (performance mode 0x%02x)\n", profile_names[profile],
+			galaxybook->profile_performance_modes[profile]);
+	return 0;
 }
 
 static int galaxybook_platform_profile_get(struct platform_profile_handler *pprof,
@@ -1234,33 +1179,148 @@ static int galaxybook_platform_profile_get(struct platform_profile_handler *ppro
 {
 	struct samsung_galaxybook *galaxybook = container_of(pprof,
 			struct samsung_galaxybook, profile_handler);
-	galaxybook_performance_mode performance_mode;
+	u8 performance_mode;
 	int err;
 
 	err = performance_mode_acpi_get(galaxybook, &performance_mode);
 	if (err)
 		return err;
 
-	*profile = performance_mode_to_profile(performance_mode);
+	*profile = profile_performance_mode(galaxybook, performance_mode);
+	if (*profile == -1)
+		return -EINVAL;
+
+	if (debug)
+		pr_warn("[DEBUG] platform profile is currently '%s' (performance mode 0x%02x)\n",
+			profile_names[*profile], performance_mode);
 
 	return 0;
 }
 
 static int galaxybook_profile_init(struct samsung_galaxybook *galaxybook)
 {
-	int err;
+	struct sawb buf = {0};
+	int mode_profile, err;
 
 	galaxybook->profile_handler.profile_get = galaxybook_platform_profile_get;
 	galaxybook->profile_handler.profile_set = galaxybook_platform_profile_set;
 
-	set_bit(PLATFORM_PROFILE_LOW_POWER, galaxybook->profile_handler.choices);
-	set_bit(PLATFORM_PROFILE_QUIET, galaxybook->profile_handler.choices);
-	set_bit(PLATFORM_PROFILE_BALANCED, galaxybook->profile_handler.choices);
-	set_bit(PLATFORM_PROFILE_PERFORMANCE, galaxybook->profile_handler.choices);
+	/* fetch supported performance mode values from ACPI method */
+	buf.safn = SAFN;
+	buf.sasb = 0x91;
+	export_guid(buf.caid, &PERFORMANCE_MODE_GUID);
+	buf.fncn = 0x51;
+	buf.subn = 0x01;
+
+	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &buf,
+			SAWB_LEN_PERFORMANCE_MODE, "get supported performance modes", &buf);
+	if (err)
+		return err;
+
+	/* set up profile_performance_modes with "unrecognized" init value (0xff) */
+	galaxybook->profile_performance_modes = kzalloc(sizeof(u8) * PLATFORM_PROFILE_LAST, GFP_KERNEL);
+	if (!galaxybook->profile_performance_modes)
+		return -ENOMEM;
+	for (int i = 0; i < PLATFORM_PROFILE_LAST; i++)
+		galaxybook->profile_performance_modes[i] = 0xff;
+
+	/*
+	 * Value returned in iob0 will have the number of supported performance modes.
+	 * The performance mode values will then be given as a list after this (iob1-iobX).
+	 * Loop backwards from last value to first value (to handle fallback cases which will come with
+	 * smaller values) and map each supported value to its correct platform_profile_option.
+	 */
+	for (int i = buf.iob0; i > 0; i--) {
+		/*
+		 * Prefer mapping to at least performance, balanced, and low-power profiles, as these are
+		 * the ones which are typically supported by userspace tools (power-profiles-daemon, etc).
+		 * - performance = "ultra", otherwise "performance"
+		 * - balanced    = "optimized", otherwise "performance" when "ultra" is supported
+		 * - low-power   = "silent", otherwise "quiet"
+		 * Different models support different modes. Additional supported modes will be mapped to
+		 * profiles that fall in between these 3.
+		 */
+		switch (buf.iob_values[i]) {
+
+		case 0x16: /* "ultra" */
+			/* ultra always maps to performance */
+			mode_profile = PLATFORM_PROFILE_PERFORMANCE;
+			break;
+
+		case 0x15: /* "performance" */
+			/* if ultra exists, map performance to balanced-performance */
+			if (galaxybook->profile_performance_modes[PLATFORM_PROFILE_PERFORMANCE] != 0xff)
+				mode_profile = PLATFORM_PROFILE_BALANCED_PERFORMANCE;
+			else /* otherwise map it to performance instead */
+				mode_profile = PLATFORM_PROFILE_PERFORMANCE;
+			break;
+
+		case 0xb: /* "silent" */
+			/* silent always maps to low-power */
+			mode_profile = PLATFORM_PROFILE_LOW_POWER;
+			break;
+
+		case 0xa: /* "quiet" */
+			/* if silent exists, map quiet to quiet */
+			if (galaxybook->profile_performance_modes[PLATFORM_PROFILE_LOW_POWER] != 0xff)
+				mode_profile = PLATFORM_PROFILE_QUIET;
+			else /* otherwise map it to low-power for better support in userspace tools */
+				mode_profile = PLATFORM_PROFILE_LOW_POWER;
+			break;
+
+		case 0x2: /* "optimized" */
+			/* optimized always maps to balanced */
+			mode_profile = PLATFORM_PROFILE_BALANCED;
+			break;
+
+		case 0x1: /* "performance" for models that lack 0x15 */
+			/* map to performance if performance is not already supported */
+			if (galaxybook->profile_performance_modes[PLATFORM_PROFILE_PERFORMANCE] == 0xff)
+				mode_profile = PLATFORM_PROFILE_PERFORMANCE;
+			else /* otherwise, ignore */
+				mode_profile = -1;
+			break;
+
+		case 0x0: /* "optimized" for models that lack 0x2 */
+			/* map to balanced if balanced is not already supported */
+			if (galaxybook->profile_performance_modes[PLATFORM_PROFILE_BALANCED] == 0xff)
+				mode_profile = PLATFORM_PROFILE_BALANCED;
+			else /* otherwise, ignore */
+				mode_profile = -1;
+			break;
+
+		default: /* any other value is not supported */
+			mode_profile = -1;
+			break;
+		}
+
+		/* if current mode value was mapped to a supported platform_profile_option, set it up */
+		if (mode_profile > -1) {
+			galaxybook->profile_performance_modes[mode_profile] = buf.iob_values[i];
+			set_bit(mode_profile, galaxybook->profile_handler.choices);
+			pr_info("will support profile '%s' with performance mode value 0x%x\n",
+						profile_names[mode_profile], buf.iob_values[i]);
+		} else {
+			pr_info("unmapped performance mode value 0x%x will be ignored\n", buf.iob_values[i]);
+		}
+	}
 
 	err = platform_profile_register(&galaxybook->profile_handler);
 	if (err)
 		return err;
+
+	/* now check currently set performance mode; if it is not supported then set default profile */
+	u8 current_performance_mode;
+	err = performance_mode_acpi_get(galaxybook, &current_performance_mode);
+	if (err)
+		pr_warn("failed with code %d when fetching initial performance mode\n", err);	
+	if (profile_performance_mode(galaxybook, current_performance_mode) == -1) {
+		pr_info("initial performance mode value is not supported by device; setting to default\n");
+		err = galaxybook_platform_profile_set(&galaxybook->profile_handler,
+				DEFAULT_PLATFORM_PROFILE);
+		if (err)
+			return err;
+	}
 
 	return 0;
 }
@@ -1270,55 +1330,6 @@ static void galaxybook_profile_exit(struct samsung_galaxybook *galaxybook)
 	platform_profile_remove();
 }
 
-static int galaxybook_performance_mode_init(struct samsung_galaxybook *galaxybook)
-{
-	struct sawb perf_modes_buf = {0};
-	struct sawb perf_mode_values_buf = {0};
-	int err;
-
-	perf_modes_buf.safn = SAFN;
-	perf_modes_buf.sasb = 0x91;
-	export_guid(perf_modes_buf.caid, &PERFORMANCE_MODE_GUID);
-	perf_modes_buf.fncn = 0x51;
-	perf_modes_buf.subn = 0x00;
-
-	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &perf_modes_buf,
-			SAWB_LEN_PERFORMANCE_MODE, "get supported performance modes", &perf_modes_buf);
-	if (err)
-		return err;
-
-	perf_mode_values_buf.safn = SAFN;
-	perf_mode_values_buf.sasb = 0x91;
-	export_guid(perf_mode_values_buf.caid, &PERFORMANCE_MODE_GUID);
-	perf_mode_values_buf.fncn = 0x51;
-	perf_mode_values_buf.subn = 0x01;
-
-	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_PERFORMANCE_MODE, &perf_mode_values_buf,
-			SAWB_LEN_PERFORMANCE_MODE, "get performance mode values", &perf_mode_values_buf);
-	if (err)
-		return err;
-
-	/* Ideally, we could use the above to dynamically read performance_modes from the device.
-	 * For now, though, we will just set hard-coded value tables in quirks and then print the values
-	 * here. */
-
-	for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++)
-		pr_info("will support performance_mode '%s' with value 0x%x\n", performance_mode_names[i],
-				performance_modes[i]);
-
-	/* now check currently set performance_mode; if it is not supported then set default profile */
-	galaxybook_performance_mode current_performance_mode;
-	err = performance_mode_acpi_get(galaxybook, &current_performance_mode);
-	if (err) {
-		pr_info("initial performance_mode value is not supported by device; setting to default\n");
-		err = galaxybook_platform_profile_set(&galaxybook->profile_handler,
-				DEFAULT_PLATFORM_PROFILE);
-		if (err)
-			return err;
-	}
-
-	return 0;
-}
 
 /*
  * Platform device
@@ -1361,15 +1372,6 @@ static int galaxybook_platform_probe(struct platform_device *pdev)
 			acpi_hotkeys = false;
 		if (quirks->disable_wmi_hotkeys && !wmi_hotkeys_was_set)
 			wmi_hotkeys = false;
-
-		/* set performance_modes values if given in quirks */
-		if (quirks->performance_modes) {
-			if (debug)
-				pr_warn("[DEBUG] performance_modes override exist in quirks\n");
-			for (int i = 0; i < PERFORMANCE_MODE_COUNT; i++) {
-				performance_modes[i] = quirks->performance_modes[i];
-			}
-		}
 	}
 	return 0;
 }
@@ -1414,23 +1416,13 @@ static void galaxybook_platform_exit(struct samsung_galaxybook *galaxybook)
  * Hotkey work and filters
  */
 
-static const enum platform_profile_option performance_mode_hotkey_next_profile[] = {
-	[PLATFORM_PROFILE_LOW_POWER] = PLATFORM_PROFILE_QUIET,
-	[PLATFORM_PROFILE_QUIET] = PLATFORM_PROFILE_BALANCED,
-	[PLATFORM_PROFILE_BALANCED] = PLATFORM_PROFILE_PERFORMANCE,
-	[PLATFORM_PROFILE_PERFORMANCE] = PLATFORM_PROFILE_LOW_POWER,
-};
 static void galaxybook_performance_mode_hotkey_work(struct work_struct *work)
 {
-	struct samsung_galaxybook *galaxybook = container_of(work,
-			struct samsung_galaxybook, performance_mode_hotkey_work);
-	enum platform_profile_option current_profile;
-
-	galaxybook_platform_profile_get(&galaxybook->profile_handler, &current_profile);
-	galaxybook_platform_profile_set(&galaxybook->profile_handler,
-			performance_mode_hotkey_next_profile[current_profile]);
-	platform_profile_notify();
-
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+	platform_profile_cycle();
+#else
+	pr_warn("performance mode hotkey requires kernel version 6.10 or higher\n");
+#endif
 	return;
 }
 
@@ -1711,16 +1703,10 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	}
 
 	if (performance_mode) {
-		pr_info("initializing performance_mode\n");
-		err = galaxybook_performance_mode_init(galaxybook);
-		if (err) {
-			pr_err("failure initializing performance_mode");
-			goto err_platform_exit;
-		}
-		pr_info("initializing platform profile\n");
+		pr_info("initializing performance mode and platform profile\n");
 		err = galaxybook_profile_init(galaxybook);
 		if (err) {
-			pr_err("failure initializing platform profile");
+			pr_err("failure initializing performance mode and platform profile");
 			goto err_platform_exit;
 		}
 	} else {
