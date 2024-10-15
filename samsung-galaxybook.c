@@ -307,6 +307,11 @@ static int galaxybook_acpi_method(struct samsung_galaxybook *galaxybook, acpi_st
 					purpose_str,
 					method);
 			status = -EIO;
+		} else if (out_obj->buffer.pointer[5] == 0xff) {
+			pr_err("failed %s with ACPI method %s; device responsded with failure code 0xff\n",
+					purpose_str,
+					method);
+			status = -EIO;
 		} else {
 			memcpy(ret, out_obj->buffer.pointer, len);
 		}
@@ -1655,14 +1660,6 @@ static int galaxybook_acpi_init(struct samsung_galaxybook *galaxybook)
 	if (err)
 		return err;
 
-	err = galaxybook_enable_acpi_feature(galaxybook, SASB_POWER_MANAGEMENT);
-	if (err)
-		return err;
-
-	err = galaxybook_enable_acpi_feature(galaxybook, SASB_ALLOW_RECORDING);
-	if (err)
-		return err;
-
 	return 0;
 }
 
@@ -1693,6 +1690,13 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (err) {
 		pr_err("failure initializing ACPI device\n");
 		goto err_free;
+	}
+
+	pr_info("initializing ACPI power management features\n");
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_POWER_MANAGEMENT);
+	if (err) {
+		pr_err("failure initializing ACPI power management features\n");
+		goto err_acpi_exit;
 	}
 
 	pr_info("initializing platform device\n");
@@ -1729,6 +1733,13 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		battery_hook_register(&galaxybook_battery_hook);
 	} else {
 		pr_warn("battery_threshold is disabled\n");
+	}
+
+	pr_info("initializing ACPI allow_recording feature\n");
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_ALLOW_RECORDING);
+	if (err) {
+		pr_err("initializing ACPI allow_recording feature\n");
+		goto err_battery_threshold_exit;
 	}
 
 	if (i8042_filter) {
