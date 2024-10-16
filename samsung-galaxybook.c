@@ -785,14 +785,7 @@ static int charge_control_end_threshold_acpi_set(struct samsung_galaxybook *gala
 	if (err)
 		return err;
 
-	if (buf.guds[1] != 0x90 && buf.guds[2] != (value == 100 ? 0 : value)) {
-		pr_err("invalid response when setting charge_control_end_threshold; " \
-				"returned value was: 0x%02x 0x%02x\n",
-				buf.guds[1], buf.guds[2]);
-		return -EINVAL;
-	}
-
-	pr_info("set battery charge_control_end_threshold to %d\n", buf.guds[2]);
+	pr_info("set battery charge_control_end_threshold to %d\n", (value == 100 ? 0 : value));
 
 	return 0;
 }
