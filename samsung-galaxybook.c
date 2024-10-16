@@ -480,13 +480,6 @@ static int start_on_lid_open_acpi_set(struct samsung_galaxybook *galaxybook, con
 	if (err)
 		return err;
 
-	if (buf.guds[1] != 0x80 && buf.guds[2] != value) {
-		pr_err("invalid response when setting start_on_lid_open; " \
-				"returned value was: 0x%02x 0x%02x\n",
-				buf.guds[1], buf.guds[2]);
-		return -EINVAL;
-	}
-
 	pr_info("turned start_on_lid_open %s\n", value ? "on (1)" : "off (0)");
 
 	return 0;
@@ -570,12 +563,6 @@ static int usb_charge_acpi_set(struct samsung_galaxybook *galaxybook, const bool
 	if (err)
 		return err;
 
-	if (buf.gunm != value) {
-		pr_err("invalid response when setting usb_charge; returned value was: 0x%02x\n",
-				buf.gunm);
-		return -EINVAL;
-	}
-
 	pr_info("turned usb_charge %s\n", value ? "on (1)" : "off (0)");
 
 	return 0;
@@ -654,12 +641,6 @@ static int allow_recording_acpi_set(struct samsung_galaxybook *galaxybook, const
 			"setting allow_recording", &buf);
 	if (err)
 		return err;
-
-	if (buf.gunm != value) {
-		pr_err("invalid response when setting allow_recording; returned value was: 0x%02x\n",
-				buf.gunm);
-		return -EINVAL;
-	}
 
 	pr_info("turned allow_recording %s\n", value ? "on (1)" : "off (0)");
 
