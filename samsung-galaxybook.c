@@ -1400,7 +1400,32 @@ static void galaxybook_performance_mode_hotkey_work(struct work_struct *work)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 	platform_profile_cycle();
 #else
-	pr_warn("performance mode hotkey requires kernel version 6.10 or higher\n");
+	struct samsung_galaxybook *galaxybook = container_of(work,
+			struct samsung_galaxybook, performance_mode_hotkey_work);
+	u8 current_performance_mode;
+	enum platform_profile_option current_profile;
+	int i;
+	performance_mode_acpi_get(galaxybook, &current_performance_mode);
+	current_profile = profile_performance_mode(galaxybook, current_performance_mode);
+	current_profile++;
+	/* try setting the "next" profile starting from the current */
+	for (i = current_profile; i < PLATFORM_PROFILE_LAST; i++) {
+		if (galaxybook->profile_performance_modes[i] != 0xff) {
+			galaxybook_platform_profile_set(&galaxybook->profile_handler, i);
+			platform_profile_notify();
+			return;
+		}
+	}
+	/* if that did not work, maybe we were at the end; start again from 0 and try again */
+	for (i = 0; i < PLATFORM_PROFILE_LAST; i++) {
+		if (galaxybook->profile_performance_modes[i] != 0xff) {
+			galaxybook_platform_profile_set(&galaxybook->profile_handler, i);
+			platform_profile_notify();
+			return;
+		}
+	}
+	/* if that still did not work, there was some kind of problem */
+	pr_warn("performance mode hotkey failed to find any supported profile to apply\n");
 #endif
 	return;
 }
