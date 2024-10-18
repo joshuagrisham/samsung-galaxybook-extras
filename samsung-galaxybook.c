@@ -503,10 +503,9 @@ static int start_on_lid_open_acpi_get(struct samsung_galaxybook *galaxybook, boo
 
 	*value = buf.guds[1];
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] start_on_lid_open is currently %s\n",
 				(buf.guds[1] ? "on (1)" : "off (0)"));
-	}
 
 	return 0;
 }
@@ -584,10 +583,9 @@ static int usb_charge_acpi_get(struct samsung_galaxybook *galaxybook, bool *valu
 
 	*value = buf.gunm;
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] usb_charge is currently %s\n",
 				(buf.gunm ? "on (1)" : "off (0)"));
-	}
 
 	return 0;
 }
@@ -663,10 +661,9 @@ static int allow_recording_acpi_get(struct samsung_galaxybook *galaxybook, bool 
 
 	*value = buf.gunm;
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] allow_recording is currently %s\n",
 				(buf.gunm ? "on (1)" : "off (0)"));
-	}
 
 	return 0;
 }
@@ -789,11 +786,10 @@ static int charge_control_end_threshold_acpi_get(struct samsung_galaxybook *gala
 
 	*value = buf.guds[1];
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] battery charge control is currently %s; " \
 				"battery charge_control_end_threshold is %d\n",
 				(buf.guds[1] > 0 ? "on" : "off"), buf.guds[1]);
-	}
 
 	return 0;
 }
@@ -1405,6 +1401,10 @@ static void galaxybook_performance_mode_hotkey_work(struct work_struct *work)
 	u8 current_performance_mode;
 	enum platform_profile_option current_profile;
 	int i;
+
+	if (!galaxybook->profile_performance_modes)
+		return;
+
 	performance_mode_acpi_get(galaxybook, &current_performance_mode);
 	current_profile = profile_performance_mode(galaxybook, current_performance_mode);
 	current_profile++;
@@ -1470,29 +1470,26 @@ static bool galaxybook_i8042_filter(unsigned char data, unsigned char str,
 
 		/* kbd_backlight keydown */
 		if (data == 0x2c) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: kbd_backlight keydown\n");
-			}
 		}
 		/* kbd_backlight keyup */
 		if (data == 0xac) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: kbd_backlight keyup\n");
-			}
-			schedule_work(&galaxybook_ptr->kbd_backlight_hotkey_work);
+			if (kbd_backlight)
+				schedule_work(&galaxybook_ptr->kbd_backlight_hotkey_work);
 		}
 
 		/* allow_recording keydown */
 		if (data == 0x1f) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: allow_recording keydown\n");
-			}
 		}
 		/* allow_recording keyup */
 		if (data == 0x9f) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: allow_recording keyup\n");
-			}
 			schedule_work(&galaxybook_ptr->allow_recording_hotkey_work);
 		}
 	}
@@ -1509,9 +1506,8 @@ static void galaxybook_input_notify(struct samsung_galaxybook *galaxybook, int e
 {
 	if (!galaxybook->input)
 		return;
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] input notification event: 0x%x\n", event);
-	}
 	if (!sparse_keymap_report_event(galaxybook->input, event, 1, true)) {
 		pr_warn("unknown input notification event: 0x%x\n", event);
 		pr_warn("Please create an issue with this information at " \
@@ -1623,8 +1619,12 @@ static void galaxybook_acpi_notify(struct acpi_device *device, u32 event)
 	if (!acpi_hotkeys)
 		return;
 
-	if (event == ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE)
-		schedule_work(&galaxybook_ptr->performance_mode_hotkey_work);
+	if (event == ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE) {
+		if (debug)
+			pr_warn("[DEBUG] hotkey: performance_mode keydown\n");
+		if (performance_mode)
+			schedule_work(&galaxybook_ptr->performance_mode_hotkey_work);
+	}
 
 	galaxybook_input_notify(galaxybook, event);
 }
