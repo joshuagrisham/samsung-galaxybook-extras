@@ -307,6 +307,11 @@ static int galaxybook_acpi_method(struct samsung_galaxybook *galaxybook, acpi_st
 					purpose_str,
 					method);
 			status = -EIO;
+		} else if (out_obj->buffer.pointer[5] == 0xff) {
+			pr_err("failed %s with ACPI method %s; device responded with failure code 0xff\n",
+					purpose_str,
+					method);
+			status = -EIO;
 		} else {
 			memcpy(ret, out_obj->buffer.pointer, len);
 		}
@@ -475,13 +480,6 @@ static int start_on_lid_open_acpi_set(struct samsung_galaxybook *galaxybook, con
 	if (err)
 		return err;
 
-	if (buf.guds[1] != 0x80 && buf.guds[2] != value) {
-		pr_err("invalid response when setting start_on_lid_open; " \
-				"returned value was: 0x%02x 0x%02x\n",
-				buf.guds[1], buf.guds[2]);
-		return -EINVAL;
-	}
-
 	pr_info("turned start_on_lid_open %s\n", value ? "on (1)" : "off (0)");
 
 	return 0;
@@ -505,10 +503,9 @@ static int start_on_lid_open_acpi_get(struct samsung_galaxybook *galaxybook, boo
 
 	*value = buf.guds[1];
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] start_on_lid_open is currently %s\n",
 				(buf.guds[1] ? "on (1)" : "off (0)"));
-	}
 
 	return 0;
 }
@@ -565,12 +562,6 @@ static int usb_charge_acpi_set(struct samsung_galaxybook *galaxybook, const bool
 	if (err)
 		return err;
 
-	if (buf.gunm != value) {
-		pr_err("invalid response when setting usb_charge; returned value was: 0x%02x\n",
-				buf.gunm);
-		return -EINVAL;
-	}
-
 	pr_info("turned usb_charge %s\n", value ? "on (1)" : "off (0)");
 
 	return 0;
@@ -592,10 +583,9 @@ static int usb_charge_acpi_get(struct samsung_galaxybook *galaxybook, bool *valu
 
 	*value = buf.gunm;
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] usb_charge is currently %s\n",
 				(buf.gunm ? "on (1)" : "off (0)"));
-	}
 
 	return 0;
 }
@@ -650,12 +640,6 @@ static int allow_recording_acpi_set(struct samsung_galaxybook *galaxybook, const
 	if (err)
 		return err;
 
-	if (buf.gunm != value) {
-		pr_err("invalid response when setting allow_recording; returned value was: 0x%02x\n",
-				buf.gunm);
-		return -EINVAL;
-	}
-
 	pr_info("turned allow_recording %s\n", value ? "on (1)" : "off (0)");
 
 	return 0;
@@ -677,10 +661,9 @@ static int allow_recording_acpi_get(struct samsung_galaxybook *galaxybook, bool 
 
 	*value = buf.gunm;
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] allow_recording is currently %s\n",
 				(buf.gunm ? "on (1)" : "off (0)"));
-	}
 
 	return 0;
 }
@@ -780,14 +763,7 @@ static int charge_control_end_threshold_acpi_set(struct samsung_galaxybook *gala
 	if (err)
 		return err;
 
-	if (buf.guds[1] != 0x90 && buf.guds[2] != (value == 100 ? 0 : value)) {
-		pr_err("invalid response when setting charge_control_end_threshold; " \
-				"returned value was: 0x%02x 0x%02x\n",
-				buf.guds[1], buf.guds[2]);
-		return -EINVAL;
-	}
-
-	pr_info("set battery charge_control_end_threshold to %d\n", buf.guds[2]);
+	pr_info("set battery charge_control_end_threshold to %d\n", (value == 100 ? 0 : value));
 
 	return 0;
 }
@@ -810,11 +786,10 @@ static int charge_control_end_threshold_acpi_get(struct samsung_galaxybook *gala
 
 	*value = buf.guds[1];
 
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] battery charge control is currently %s; " \
 				"battery charge_control_end_threshold is %d\n",
 				(buf.guds[1] > 0 ? "on" : "off"), buf.guds[1]);
-	}
 
 	return 0;
 }
@@ -1421,7 +1396,36 @@ static void galaxybook_performance_mode_hotkey_work(struct work_struct *work)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 	platform_profile_cycle();
 #else
-	pr_warn("performance mode hotkey requires kernel version 6.10 or higher\n");
+	struct samsung_galaxybook *galaxybook = container_of(work,
+			struct samsung_galaxybook, performance_mode_hotkey_work);
+	u8 current_performance_mode;
+	enum platform_profile_option current_profile;
+	int i;
+
+	if (!galaxybook->profile_performance_modes)
+		return;
+
+	performance_mode_acpi_get(galaxybook, &current_performance_mode);
+	current_profile = profile_performance_mode(galaxybook, current_performance_mode);
+	current_profile++;
+	/* try setting the "next" profile starting from the current */
+	for (i = current_profile; i < PLATFORM_PROFILE_LAST; i++) {
+		if (galaxybook->profile_performance_modes[i] != 0xff) {
+			galaxybook_platform_profile_set(&galaxybook->profile_handler, i);
+			platform_profile_notify();
+			return;
+		}
+	}
+	/* if that did not work, maybe we were at the end; start again from 0 and try again */
+	for (i = 0; i < PLATFORM_PROFILE_LAST; i++) {
+		if (galaxybook->profile_performance_modes[i] != 0xff) {
+			galaxybook_platform_profile_set(&galaxybook->profile_handler, i);
+			platform_profile_notify();
+			return;
+		}
+	}
+	/* if that still did not work, there was some kind of problem */
+	pr_warn("performance mode hotkey failed to find any supported profile to apply\n");
 #endif
 	return;
 }
@@ -1466,29 +1470,26 @@ static bool galaxybook_i8042_filter(unsigned char data, unsigned char str,
 
 		/* kbd_backlight keydown */
 		if (data == 0x2c) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: kbd_backlight keydown\n");
-			}
 		}
 		/* kbd_backlight keyup */
 		if (data == 0xac) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: kbd_backlight keyup\n");
-			}
-			schedule_work(&galaxybook_ptr->kbd_backlight_hotkey_work);
+			if (kbd_backlight)
+				schedule_work(&galaxybook_ptr->kbd_backlight_hotkey_work);
 		}
 
 		/* allow_recording keydown */
 		if (data == 0x1f) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: allow_recording keydown\n");
-			}
 		}
 		/* allow_recording keyup */
 		if (data == 0x9f) {
-			if (debug) {
+			if (debug)
 				pr_warn("[DEBUG] hotkey: allow_recording keyup\n");
-			}
 			schedule_work(&galaxybook_ptr->allow_recording_hotkey_work);
 		}
 	}
@@ -1505,9 +1506,8 @@ static void galaxybook_input_notify(struct samsung_galaxybook *galaxybook, int e
 {
 	if (!galaxybook->input)
 		return;
-	if (debug) {
+	if (debug)
 		pr_warn("[DEBUG] input notification event: 0x%x\n", event);
-	}
 	if (!sparse_keymap_report_event(galaxybook->input, event, 1, true)) {
 		pr_warn("unknown input notification event: 0x%x\n", event);
 		pr_warn("Please create an issue with this information at " \
@@ -1619,8 +1619,12 @@ static void galaxybook_acpi_notify(struct acpi_device *device, u32 event)
 	if (!acpi_hotkeys)
 		return;
 
-	if (event == ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE)
-		schedule_work(&galaxybook_ptr->performance_mode_hotkey_work);
+	if (event == ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE) {
+		if (debug)
+			pr_warn("[DEBUG] hotkey: performance_mode keydown\n");
+		if (performance_mode)
+			schedule_work(&galaxybook_ptr->performance_mode_hotkey_work);
+	}
 
 	galaxybook_input_notify(galaxybook, event);
 }
@@ -1655,14 +1659,6 @@ static int galaxybook_acpi_init(struct samsung_galaxybook *galaxybook)
 	if (err)
 		return err;
 
-	err = galaxybook_enable_acpi_feature(galaxybook, SASB_POWER_MANAGEMENT);
-	if (err)
-		return err;
-
-	err = galaxybook_enable_acpi_feature(galaxybook, SASB_ALLOW_RECORDING);
-	if (err)
-		return err;
-
 	return 0;
 }
 
@@ -1693,6 +1689,13 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	if (err) {
 		pr_err("failure initializing ACPI device\n");
 		goto err_free;
+	}
+
+	pr_info("initializing ACPI power management features\n");
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_POWER_MANAGEMENT);
+	if (err) {
+		pr_err("failure initializing ACPI power management features\n");
+		goto err_acpi_exit;
 	}
 
 	pr_info("initializing platform device\n");
@@ -1729,6 +1732,13 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		battery_hook_register(&galaxybook_battery_hook);
 	} else {
 		pr_warn("battery_threshold is disabled\n");
+	}
+
+	pr_info("initializing ACPI allow_recording feature\n");
+	err = galaxybook_enable_acpi_feature(galaxybook, SASB_ALLOW_RECORDING);
+	if (err) {
+		pr_err("initializing ACPI allow_recording feature\n");
+		goto err_battery_threshold_exit;
 	}
 
 	if (i8042_filter) {
