@@ -132,6 +132,7 @@ static const struct acpi_device_id galaxybook_device_ids[] = {
 	{ "SAM0427", (unsigned long)&sam0427_quirks },
 	{ "SAM0428" },
 	{ "SAM0429" },
+	{ "SAM0430" },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, galaxybook_device_ids);
@@ -904,7 +905,7 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 		goto out_free;
 	}
 
-	/* 
+	/*
 	 * fan_speeds[] starts with a hard-coded 0 (fan is off), then has some "funny" logic:
 	 *  - fetch the speed level values read in from FANT and add 0x0a to each value
 	 *  - _FST method in the DSDT seems to indicate that level 3 and 4 should have the same value,
@@ -1288,7 +1289,7 @@ static int galaxybook_profile_init(struct samsung_galaxybook *galaxybook)
 	u8 current_performance_mode;
 	err = performance_mode_acpi_get(galaxybook, &current_performance_mode);
 	if (err)
-		pr_warn("failed with code %d when fetching initial performance mode\n", err);	
+		pr_warn("failed with code %d when fetching initial performance mode\n", err);
 	if (profile_performance_mode(galaxybook, current_performance_mode) == -1) {
 		pr_info("initial performance mode value is not supported by device; setting to default\n");
 		err = galaxybook_platform_profile_set(&galaxybook->profile_handler,
