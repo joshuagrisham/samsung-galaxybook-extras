@@ -96,7 +96,7 @@ sudo rmmod samsung-galaxybook
 Uninstall the module:
 
 ```sh
-sudo rm /lib/modules/`uname -r`/updates/samsung-galaxybook.ko
+sudo rm /lib/modules/`uname -r`/updates/samsung-galaxybook.ko*
 ```
 
 #### How to avoid 'signature and/or required key missing'
@@ -256,12 +256,30 @@ echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/allow_recording
 
 ### Fan speed
 
-Samsung has implemented the standard ACPI method `_FST` for the fan device, but not the other optional methods in the ACPI specification which would cause the kernel to automatically add the `fan_speed_rpm` attribute. On top of this, it seems that there are some bugs in the firmware that throw an exception when you try to execute this ACPI method. This behavior is also seen in Windows (that an ACPI exception is thrown when the fan speed is attempted to be checked), and I have not been able to see fan speeds using various hardware monitoring applications while using Windows with this device.
+Different devices have different number of fans, and different methods in order to be able to successfully read their status. Samsung does seem to have implemented the ACPI standard fan device method `_FST` for most of the various implementations, but not the other optional methods in the ACPI specification which would cause the kernel to automatically add the `fan_speed_rpm` attribute. On top of this, it seems that there are some bugs in the firmware that often throw an exception when you try to execute this ACPI method. This behavior is also seen in Windows (that an ACPI exception is thrown when the fan speed is attempted to be checked), and I have not been able to see fan speeds using various hardware monitoring applications while using Windows with this device.
 
-However, I believe I have succeeded in figuring out roughly the intention of how their `_FST` method is supposed to work:
+This platform driver attempts to resolve all PNP fans that are available in the ACPI and add support for reading their speed using the following decision logic:
 
-1. There is a data package `FANT` ("fan table"??) which seems to be some kind of list of possible RPM speeds that the fan can operate at for each different "level" (0 through 5).
-2. There is a data field on the embedded controller called `FANS` ("fan speed"??) which seems to give the current "level" that the fan is operating at.
+1. Do all 4 required methods exist so that the fan should be supported out-of-the-box by ACPI? If yes, then do not handle it with this driver.
+2. Does the method `_FST` exist and appears to be working (returns a speed value greater than 0)? If yes, add an attribute `fan_speed_rpm` to it and as a fan input channel to the hwmon device.
+3. Does the field `FANS` (fan speed level) exist on the embedded controller, and the table `FANT` (fan speed level table) exist on the fan? If so, add the `fan_speed_rpm` to this fan device, plus as a fan input channel to the hwmon device, and build the list of custom fan speeds based on the below logic (derived from reading the DSDT and trying to interpret the intention of how the original `_FST` seems to want to work).
+
+The fan speed can be monitored using hwmon sensors or by reading the `fan_speed_rpm` sysfs attribute.
+
+```sh
+# read current fan speed rpm from sysfs attribute
+cat /sys/bus/acpi/devices/PNP0C0B\:00/fan_speed_rpm
+
+# read current fan speed rpm from hwmon device
+sensors
+```
+
+#### Custom fan speed logic
+
+For devices where the `_FST` method does not work correctly, the below logic is used in order to derive possible speeds for each available level reported by the `FANS` field.
+
+1. There is a data package `FANT` ("fan table"?) which seems to be some kind of list of possible RPM speeds that the fan can operate at for each different "level" (0 through 5).
+2. There is a data field on the embedded controller called `FANS` ("fan speed"?) which seems to give the current "level" that the fan is operating at.
 
 I have **assumed** that the values from `FANT` are integers which represent the actual RPM values (they seem reasonble, anyway), but can't be one-hundred percent certain that this assumption is correct. It would be interesting to get confirmation from Samsung or if someone has a way to measure the actual speed of the fan.
 
@@ -275,15 +293,25 @@ The fan can either be completely off (0) or one of the levels represented by the
 
 On top of this, in Samsung's `_FST` method it seems to be adding `0x0a` (10) to each value before trying to report them, and that level 3 and 4 should have the same value, while level 5 should be the 4th value from `FANT`. However, real-life observation suggests that level 3 and 4 are in fact different, and that level 5 seems to be significantly louder than level 4. Due to this, this driver will just "guess" that levels 3 and 4 are actually as is listed in `FANT`, and that the last level is maybe 1000 RPM faster than level 4 (unless anyone can find something better than this!).
 
-The fan speed can be monitored using hwmon sensors or by reading the `fan_speed_rpm` sysfs attribute.
+#### Adding fake test fans to help with driver development
+
+There is a test SSDT available in the file [gb_test_fans_ssdt.dsl](./gb_test_fans_ssdt.dsl) which includes a set of "faked" PNP ACPI fan devices that can be used to test how the driver works with different scenarios. This can be built and loaded dynamically but you will also need to remove and reload the platform driver module in order to test how they will be handled by it.
 
 ```sh
-# read current fan speed rpm from sysfs attribute
-cat /sys/bus/acpi/devices/PNP0C0B\:00/fan_speed_rpm
+# create fake device table
+sudo modprobe acpi_configfs
+sudo mkdir /sys/kernel/config/acpi/table/gb_test_fans_ssdt
 
-# read current fan speed rpm from hwmon device
-sensors
+# build and load the aml
+iasl gb_test_fans_ssdt.dsl
+cat gb_test_fans_ssdt.aml | sudo tee /sys/kernel/config/acpi/table/gb_test_fans_ssdt/aml
+
+# remove and reload the module (via insmod or modprobe)
+sudo rmmod samsung-galaxybook
+sudo insmod samsung-galaxybook.ko debug=true
 ```
+
+> **Note:** You will need to restart in order to remove these fake devices.
 
 ### Performance mode
 
