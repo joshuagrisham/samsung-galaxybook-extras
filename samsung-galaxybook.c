@@ -25,6 +25,7 @@
 #include <linux/workqueue.h>
 #include <linux/input.h>
 #include <linux/input/sparse-keymap.h>
+#include <linux/nls.h>
 #include <linux/version.h>
 
 #include <acpi/battery.h>
@@ -147,6 +148,17 @@ static const struct dmi_system_id galaxybook_dmi_ids[] = {
 	{}
 };
 
+struct galaxybook_fan {
+	struct acpi_device fan;
+	char *description;
+	bool supports_fst;
+	unsigned int *fan_speeds;
+	int fan_speeds_count;
+	struct dev_ext_attribute fan_speed_rpm_ext_attr;
+};
+
+#define MAX_FAN_COUNT 5
+
 struct samsung_galaxybook {
 	struct platform_device *platform;
 	struct acpi_device *acpi;
@@ -163,9 +175,8 @@ struct samsung_galaxybook {
 
 	struct work_struct allow_recording_hotkey_work;
 
-	struct acpi_device fan;
-	unsigned int *fan_speeds;
-	int fan_speeds_count;
+	struct galaxybook_fan fans[MAX_FAN_COUNT];
+	int fans_count;
 
 #if IS_ENABLED(CONFIG_HWMON)
 	struct device *hwmon;
@@ -231,7 +242,7 @@ struct sawb {
 };
 
 #define ACPI_FAN_DEVICE_ID    "PNP0C0B"
-#define ACPI_FAN_SPEED_LIST   "\\_SB.PC00.LPCB.FAN0.FANT"
+#define ACPI_FAN_SPEED_LIST   "FANT"
 #define ACPI_FAN_SPEED_VALUE  "\\_SB.PC00.LPCB.H_EC.FANS"
 
 #define KBD_BACKLIGHT_MAX_BRIGHTNESS  3
@@ -249,6 +260,12 @@ static const struct key_entry galaxybook_acpi_keymap[] = {
 	{KE_END, 0},
 };
 
+static void pr_warn_create_issue(void)
+{
+	pr_warn("Please create a new issue with this information at " \
+			"https://github.com/joshuagrisham/samsung-galaxybook-extras/issues\n");
+}
+
 
 /*
  * ACPI method handling
@@ -262,6 +279,28 @@ static void debug_print_acpi_object_buffer(const char *level, const char *header
 		print_hex_dump(level, "samsung_galaxybook: [DEBUG]     ", DUMP_PREFIX_NONE, 16, 1,
 				obj->buffer.pointer, obj->buffer.length, false);
 	}
+}
+
+static char * get_acpi_device_description(struct acpi_device *acpi_dev)
+{
+	/* first try to get value of _STR but convert it to utf8  */
+	if (acpi_dev->pnp.str_obj != NULL && acpi_dev->pnp.str_obj->buffer.length > 0) {
+		char *buf = kzalloc(sizeof(*buf) * acpi_dev->pnp.str_obj->buffer.length, GFP_KERNEL);
+		utf16s_to_utf8s(
+			(wchar_t *)acpi_dev->pnp.str_obj->buffer.pointer,
+			acpi_dev->pnp.str_obj->buffer.length,
+			UTF16_LITTLE_ENDIAN, buf,
+			PAGE_SIZE - 1);
+		return buf;
+	}
+
+	/* if _STR is missing then just use the device name */
+	struct acpi_buffer string = { ACPI_ALLOCATE_BUFFER, NULL };
+	if (ACPI_SUCCESS(acpi_get_name(acpi_dev->handle, ACPI_SINGLE_NAME, &string)) &&
+			string.length > 0)
+		return string.pointer;
+
+	return NULL;
 }
 
 static int galaxybook_acpi_method(struct samsung_galaxybook *galaxybook, acpi_string method,
@@ -850,7 +889,39 @@ static struct acpi_battery_hook galaxybook_battery_hook = {
  * Fan speed
  */
 
-static int fan_speed_get(struct samsung_galaxybook *galaxybook, unsigned int *speed)
+static int fan_speed_get_fst(struct galaxybook_fan *fan, unsigned int *speed)
+{
+	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *response_obj = NULL;
+	acpi_status status;
+	int ret = 0;
+
+	status = acpi_evaluate_object(fan->fan.handle, "_FST", NULL, &response);
+	if (ACPI_FAILURE(status)) {
+		pr_err("Get fan state failed\n");
+		return -ENODEV;
+	}
+
+	response_obj = response.pointer;
+	if (!response_obj || response_obj->type != ACPI_TYPE_PACKAGE ||
+			response_obj->package.count != 3 ||
+			response_obj->package.elements[2].type != ACPI_TYPE_INTEGER) {
+		pr_err("Invalid _FST data\n");
+		ret = -EINVAL;
+		goto out_free;
+	}
+
+	*speed = response_obj->package.elements[2].integer.value;
+
+	if (debug)
+		pr_warn("[DEBUG] reporting fan_speed of %d\n", *speed);
+
+out_free:
+	ACPI_FREE(response.pointer);
+	return ret;
+}
+
+static int fan_speed_get_fans(struct galaxybook_fan *fan, unsigned int *speed)
 {
 	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *response_obj = NULL;
@@ -868,14 +939,14 @@ static int fan_speed_get(struct samsung_galaxybook *galaxybook, unsigned int *sp
 	if (!response_obj ||
 			response_obj->type != ACPI_TYPE_INTEGER ||
 			response_obj->integer.value > INT_MAX ||
-			(int) response_obj->integer.value > galaxybook->fan_speeds_count) {
-		pr_err("Invalid fan speed data\n");
+			(int) response_obj->integer.value > fan->fan_speeds_count) {
+		pr_err("invalid fan speed data\n");
 		ret = -EINVAL;
 		goto out_free;
 	}
 
 	speed_level = (int) response_obj->integer.value;
-	*speed = galaxybook->fan_speeds[speed_level];
+	*speed = fan->fan_speeds[speed_level];
 
 	if (debug)
 		pr_warn("[DEBUG] reporting fan_speed of %d (level %d)\n", *speed, speed_level);
@@ -885,22 +956,49 @@ out_free:
 	return ret;
 }
 
-static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
+static int fan_speed_get(struct galaxybook_fan *fan, unsigned int *speed)
+{
+	if (!fan)
+		return -ENODEV;
+	if (fan->supports_fst)
+		return fan_speed_get_fst(fan, speed);
+	else
+		return fan_speed_get_fans(fan, speed);
+}
+
+static ssize_t fan_speed_rpm_show(struct device *dev, struct device_attribute *attr, char *buffer)
+{
+	struct dev_ext_attribute *ea = container_of(attr, struct dev_ext_attribute, attr);
+	struct galaxybook_fan *fan = ea->var;
+	unsigned int speed;
+	int ret = 0;
+
+	if (!fan)
+		return -ENODEV;
+
+	ret = fan_speed_get(fan, &speed);
+	if (ret)
+		return ret;
+
+	return sysfs_emit(buffer, "%u\n", speed);
+}
+
+static int __init fan_speed_list_init(acpi_handle handle, struct galaxybook_fan *fan)
 {
 	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *response_obj = NULL;
 	acpi_status status;
 
-	status = acpi_evaluate_object(NULL, ACPI_FAN_SPEED_LIST, NULL, &response);
+	status = acpi_evaluate_object(handle, ACPI_FAN_SPEED_LIST, NULL, &response);
 	if (ACPI_FAILURE(status)) {
-		pr_err("Failed to read fan speed list\n");
+		pr_err("failed to read fan speed list\n");
 		return -ENODEV;
 	}
 
 	response_obj = response.pointer;
 	if (!response_obj || response_obj->type != ACPI_TYPE_PACKAGE ||
 			response_obj->package.count == 0) {
-		pr_err("Invalid fan speed list data\n");
+		pr_err("invalid fan speed list data\n");
 		status = -EINVAL;
 		goto out_free;
 	}
@@ -914,80 +1012,144 @@ static int __init fan_speed_list_init(struct samsung_galaxybook *galaxybook)
 	 *    louder -- we will just "guess" it is 1000 RPM faster than the highest value from FANT?
 	 */
 
-	galaxybook->fan_speeds = kzalloc(sizeof(unsigned int) * (response_obj->package.count + 2),
+	fan->fan_speeds = kzalloc(sizeof(unsigned int) * (response_obj->package.count + 2),
 			GFP_KERNEL);
-	if (!galaxybook->fan_speeds)
+	if (!fan->fan_speeds)
 		return -ENOMEM;
 
 	/* hard-coded "off" value (0) */
-	galaxybook->fan_speeds[0] = 0;
-	galaxybook->fan_speeds_count = 1;
+	fan->fan_speeds[0] = 0;
+	fan->fan_speeds_count = 1;
 
 	/* fetch and assign the next values from FANT response */
 	int i = 0;
 	for (i = 1; i <= response_obj->package.count; i++) {
 		if (response_obj->package.elements[i-1].type != ACPI_TYPE_INTEGER) {
-			pr_err("Invalid fan speed list value at position %d (expected type %d, got type %d)\n",
+			pr_err("invalid fan speed list value at position %d (expected type %d, got type %d)\n",
 					i-1, ACPI_TYPE_INTEGER, response_obj->package.elements[i-1].type);
 			status = -EINVAL;
 			goto err_fan_speeds_free;
 		}
-		galaxybook->fan_speeds[i] = response_obj->package.elements[i-1].integer.value + 0x0a;
-		galaxybook->fan_speeds_count++;
+		fan->fan_speeds[i] = response_obj->package.elements[i-1].integer.value + 0x0a;
+		fan->fan_speeds_count++;
 	}
 
 	/* add the missing final level where we "guess" 1000 RPM faster than highest from FANT */
-	if (galaxybook->fan_speeds_count > 1) {
-		galaxybook->fan_speeds[i] = galaxybook->fan_speeds[i-1] + 1000;
-		galaxybook->fan_speeds_count++;
+	if (fan->fan_speeds_count > 1) {
+		fan->fan_speeds[i] = fan->fan_speeds[i-1] + 1000;
+		fan->fan_speeds_count++;
 	}
 
-	pr_info("initialized fan speed reporting with the following levels:\n");
-	for (i = 0; i < galaxybook->fan_speeds_count; i++)
-		pr_info("  fan speed level %d = %d\n", i, galaxybook->fan_speeds[i]);
+	pr_info("initialized fan speed reporting for device %s (%s) with the following levels:\n",
+			dev_name(&fan->fan.dev), fan->description);
+	for (i = 0; i < fan->fan_speeds_count; i++)
+		pr_info("  fan speed level %d = %d\n", i, fan->fan_speeds[i]);
 
 out_free:
 	ACPI_FREE(response.pointer);
 	return status;
 
 err_fan_speeds_free:
-	kfree(galaxybook->fan_speeds);
+	kfree(fan->fan_speeds);
 	goto out_free;
 }
 
-static ssize_t fan_speed_rpm_show(struct device *dev, struct device_attribute *attr, char *buffer)
+static acpi_status galaxybook_add_fan(acpi_handle handle, u32 level, void *context,
+				void **return_value)
 {
-	unsigned int speed;
-	int ret = 0;
+	struct acpi_device *adev = acpi_fetch_acpi_dev(handle);
+	struct samsung_galaxybook *galaxybook = context;
+	struct galaxybook_fan *fan;
+	int speed = -1;
 
-	ret = fan_speed_get(galaxybook_ptr, &speed);
-	if (ret)
-		return ret;
+	pr_info("found fan device %s\n", dev_name(&adev->dev));
 
-	return sysfs_emit(buffer, "%u\n", speed);
-}
-static DEVICE_ATTR_RO(fan_speed_rpm);
+	/* if fan meets acpi4 fan device requirements, assume it is added already under ACPI */
+	if (acpi_has_method(handle, "_FIF") &&
+			acpi_has_method(handle, "_FPS") &&
+			acpi_has_method(handle, "_FSL") &&
+			acpi_has_method(handle, "_FST")) {
+		pr_info("fan device %s should already be available as an ACPI fan; skipping\n",
+				dev_name(&adev->dev));
+		return 0;
+	}
 
-static void galaxybook_fan_speed_exit(struct samsung_galaxybook *galaxybook)
-{
-	sysfs_remove_file(&galaxybook->fan.dev.kobj, &dev_attr_fan_speed_rpm.attr);
+	if (galaxybook->fans_count >= MAX_FAN_COUNT) {
+		pr_err("maximum number of %d fans has already been reached\n", MAX_FAN_COUNT);
+		pr_warn_create_issue();
+		return 0;
+	}
+
+	fan = &galaxybook->fans[galaxybook->fans_count];
+	fan->fan = *adev;
+	fan->description = get_acpi_device_description(&fan->fan);
+
+	/* try to get speed from _FST */
+	if (ACPI_FAILURE(fan_speed_get_fst(fan, &speed))) {
+		pr_info("_FST is present but failed on fan device %s (%s); " \
+				"will attempt to add fan speed support using FANT and FANS\n",
+				dev_name(&fan->fan.dev), fan->description);
+		fan->supports_fst = false;
+	}
+	/* if speed was 0 and FANT and FANS exist, they should be used anyway due to bugs in ACPI */
+	else if (speed <= 0 &&
+			acpi_has_method(handle, ACPI_FAN_SPEED_LIST) &&
+			acpi_has_method(NULL, ACPI_FAN_SPEED_VALUE)) {
+		pr_info("_FST is present on fan device %s (%s) but returned value of 0; " \
+				"will attempt to add fan speed support using FANT and FANS\n",
+				dev_name(&fan->fan.dev), fan->description);
+		fan->supports_fst = false;
+	} else {
+		fan->supports_fst = true;
+	}
+
+	if (!fan->supports_fst) {
+		/* since FANS is a single field on the EC, it does not make sense to use more than once */
+		for (int i = 0; i < galaxybook->fans_count; i++) {
+			if (!galaxybook->fans[i].supports_fst) {
+				pr_err("more than one fan using FANS is not supported\n");
+				pr_warn_create_issue();
+				return 0;
+			}
+		}
+		if (ACPI_FAILURE(fan_speed_list_init(handle, fan))) {
+			pr_err("unable to get list of fan speeds for fan device %s (%s)\n",
+					dev_name(&fan->fan.dev), fan->description);
+			pr_warn_create_issue();
+			return 0;
+		}
+	} else {
+		pr_info("initialized fan speed reporting for device %s (%s) using method _FST\n",
+				dev_name(&fan->fan.dev), fan->description);
+	}
+
+	/* set up RO dev_ext_attribute */
+	fan->fan_speed_rpm_ext_attr.attr.attr.name = "fan_speed_rpm";
+	fan->fan_speed_rpm_ext_attr.attr.attr.mode = 0444;
+	fan->fan_speed_rpm_ext_attr.attr.show = fan_speed_rpm_show;
+	/* extended attribute var points to this galaxybook_fan so it can used in the show method */
+	fan->fan_speed_rpm_ext_attr.var = fan;
+
+	if (sysfs_create_file(&adev->dev.kobj, &fan->fan_speed_rpm_ext_attr.attr.attr))
+		pr_err("unable to create fan_speed_rpm attribute for fan device %s (%s)\n",
+				dev_name(&fan->fan.dev), fan->description);
+
+	galaxybook->fans_count++;
+
+	return 0;
 }
 
 static int __init galaxybook_fan_speed_init(struct samsung_galaxybook *galaxybook)
 {
-	int err;
+	/* get and set up all fans matching ACPI_FAN_DEVICE_ID */
+	return acpi_get_devices(ACPI_FAN_DEVICE_ID, galaxybook_add_fan, galaxybook, NULL);
+}
 
-	galaxybook->fan = *acpi_dev_get_first_match_dev(ACPI_FAN_DEVICE_ID, NULL, -1);
-
-	err = sysfs_create_file(&galaxybook->fan.dev.kobj, &dev_attr_fan_speed_rpm.attr);
-	if (err)
-		pr_err("Unable create fan_speed_rpm attribute\n");
-
-	err = fan_speed_list_init(galaxybook);
-	if (err)
-		pr_err("Unable to get list of fan speeds\n");
-
-	return 0;
+static void galaxybook_fan_speed_exit(struct samsung_galaxybook *galaxybook)
+{
+	for (int i = 0; i < galaxybook->fans_count; i++)
+		sysfs_remove_file(&galaxybook->fans[i].fan.dev.kobj,
+				&galaxybook->fans[i].fan_speed_rpm_ext_attr.attr.attr);
 }
 
 
@@ -997,45 +1159,68 @@ static int __init galaxybook_fan_speed_init(struct samsung_galaxybook *galaxyboo
 
 #if IS_ENABLED(CONFIG_HWMON)
 static umode_t galaxybook_hwmon_is_visible(const void *drvdata, enum hwmon_sensor_types type,
-				  u32 attr, int channel)
+				u32 attr, int channel)
 {
-	/*
-	 * There is only a single fan so simple logic can be used to match it and discard anything else.
-	 */
-	if (type == hwmon_fan && channel == 0 && attr == hwmon_fan_input)
-		return 0444;
-	else
+	switch (type) {
+	case hwmon_fan:
+		if (channel < galaxybook_ptr->fans_count &&
+				(attr == hwmon_fan_input || attr == hwmon_fan_label))
+			return 0444;
 		return 0;
+	default:
+		return 0;
+	}
 }
 
 static int galaxybook_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
-				   u32 attr, int channel, long *val)
+				u32 attr, int channel, long *val)
 {
-	/*
-	 * There is only a single fan so simple logic can be used to match it and discard anything else.
-	 */
-	if (type == hwmon_fan && channel == 0 && attr == hwmon_fan_input) {
-		unsigned int speed;
-		int ret = 0;
+	unsigned int speed;
 
-		ret = fan_speed_get(galaxybook_ptr, &speed);
-		if (ret)
-			return ret;
-
-		*val = speed;
-		return ret;
+	switch (type) {
+	case hwmon_fan:
+		if (channel < galaxybook_ptr->fans_count && attr == hwmon_fan_input) {
+			if (fan_speed_get(&galaxybook_ptr->fans[channel], &speed))
+				return -EIO;
+			*val = speed;
+			return 0;
+		}
+		return -EOPNOTSUPP;
+	default:
+		return -EOPNOTSUPP;
 	}
-	return -EOPNOTSUPP;
 }
 
-static const struct hwmon_channel_info * const galaxybook_hwmon_info[] = {
-	HWMON_CHANNEL_INFO(fan, HWMON_F_INPUT),
-	NULL
-};
+static int galaxybook_hwmon_read_string(struct device *dev, enum hwmon_sensor_types type,
+				u32 attr, int channel, const char **str)
+{
+	switch (type) {
+	case hwmon_fan:
+		if (channel < galaxybook_ptr->fans_count && attr == hwmon_fan_label) {
+			*str = galaxybook_ptr->fans[channel].description;
+			return 0;
+		}
+		return -EOPNOTSUPP;
+	default:
+		return -EOPNOTSUPP;
+	}
+}
 
 static const struct hwmon_ops galaxybook_hwmon_ops = {
 	.is_visible = galaxybook_hwmon_is_visible,
 	.read = galaxybook_hwmon_read,
+	.read_string = galaxybook_hwmon_read_string,
+};
+
+static const struct hwmon_channel_info * const galaxybook_hwmon_info[] = {
+	/* note: number of max possible fan channel entries here should match MAX_FAN_COUNT */
+	HWMON_CHANNEL_INFO(fan,
+			HWMON_F_INPUT | HWMON_F_LABEL,
+			HWMON_F_INPUT | HWMON_F_LABEL,
+			HWMON_F_INPUT | HWMON_F_LABEL,
+			HWMON_F_INPUT | HWMON_F_LABEL,
+			HWMON_F_INPUT | HWMON_F_LABEL),
+	NULL
 };
 
 static const struct hwmon_chip_info galaxybook_hwmon_chip_info = {
@@ -1511,8 +1696,7 @@ static void galaxybook_input_notify(struct samsung_galaxybook *galaxybook, int e
 		pr_warn("[DEBUG] input notification event: 0x%x\n", event);
 	if (!sparse_keymap_report_event(galaxybook->input, event, 1, true)) {
 		pr_warn("unknown input notification event: 0x%x\n", event);
-		pr_warn("Please create an issue with this information at " \
-				"https://github.com/joshuagrisham/samsung-galaxybook-extras/issues\n");
+		pr_warn_create_issue();
 	}
 }
 
@@ -1569,8 +1753,7 @@ static void galaxybook_input_exit(struct samsung_galaxybook *galaxybook)
 static void galaxybook_wmi_notify(u32 value, void *context)
 {
 	pr_warn("WMI Event received: %u\n", value);
-	pr_warn("Please create an issue with this information at " \
-			"https://github.com/joshuagrisham/samsung-galaxybook-extras/issues\n");
+	pr_warn_create_issue();
 
 	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *response_obj = NULL;
@@ -1679,6 +1862,8 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	galaxybook = kzalloc(sizeof(struct samsung_galaxybook), GFP_KERNEL);
 	if (!galaxybook)
 		return -ENOMEM;
+	/* set static pointer here so it can be used in various methods for hotkeys, hwmon, etc */
+	galaxybook_ptr = galaxybook;
 
 	strcpy(acpi_device_name(device), "Galaxybook Extras Controller");
 	strcpy(acpi_device_class(device), SAMSUNG_GALAXYBOOK_CLASS);
@@ -1817,9 +2002,6 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	} else {
 		pr_warn("wmi_hotkeys is disabled\n");
 	}
-
-	/* set galaxybook_ptr reference so it can be used by hotkeys */
-	galaxybook_ptr = galaxybook;
 
 	return 0;
 
