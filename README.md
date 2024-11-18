@@ -36,14 +36,9 @@ The following features might be possible to implement but require  additional de
 
 ### Supported devices
 
-The devices supported by this platform driver should be any device where `sudo dmidecode --type 3` reports `Manufacturer: SAMSUNG ELECTRONICS CO., LTD.` and `Type: Notebook`, PLUS that the ACPI device `SCAI` is present with ACPI Device IDs matching the list given in the driver (`SAM0427`, `SAM0428`, and `SAM0429` at the time of this writing). This covers most of the currently available "Samsung Galaxy Book" series notebooks, but could include others as well.
+The devices supported by this platform driver should be any device where `sudo dmidecode --type 3` reports `Manufacturer: SAMSUNG ELECTRONICS CO., LTD.` and `Type: Notebook`, PLUS that the ACPI device `SCAI` is present with ACPI Device IDs matching the list given in the driver (`SAM0427`, `SAM0428`, `SAM0429` and `SAM0430` at the time of this writing). This covers most of the currently available "Samsung Galaxy Book" series notebooks, but could include others as well.
 
-Note that for the devices with the ACPI Device ID `SAM0427`, there will currently not be support for:
-- Performance mode
-- Fan speed
-- Hotkey support
-
-If you have a device with `SAM0427` and wish to help provide support to overcome the above limitations, please feel free to create an issue!
+The intention is that each feature within the platform driver attempts to test if it is supported or not in some way before the feature is enabled. Some devices have slightly different hardware and/or behave in a slightly different manner; if you have a device where the driver is disabling a certain feature which you believe should be supported, please create an issue!
 
 I have also seen that Windows uses the same driver for `SAM0426` (used by devices like the Notebook 9 Pro 15" and/or similar), so my suspicion is that large parts of this driver probably also work for these devices. If you have one of these devices, and want to test this driver with it, please create an issue for help and to share your findings.
 
@@ -54,13 +49,12 @@ The platform driver supports the following module parameters:
 - `kbd_backlight`: Enable Keyboard Backlight control (default on) (bool)
 - `battery_threshold`: Enable battery charge threshold control (default on) (bool)
 - `performance_mode`: Enable Performance Mode control (default on) (bool)
+- `allow_recording`: Enable control to allow or block access to camera and microphone (default on) (bool)
 - `fan_speed`: Enable fan speed (default on) (bool)
 - `i8042_filter`: Enable capturing keyboard hotkey events (default on) (bool)
-- `acpi_hotkeys`: Enable ACPI hotkey events (default on) (bool)
-- `wmi_hotkeys`: Enable WMI hotkey events (default on) (bool)
 - `debug`: Enable debug messages (default off) (bool)
 
-In general the intention of these parameters is to allow for enabling or disabling of various features provided by the driver, especially in cases where a particular feature does not appear to work with your device. The availability of the various "settings" flags (`usb_charge`, `start_on_lid_open`, etc) will always be enabled and cannot be disabled at this time.
+In general, the intention of these parameters is to allow for the enabling or disabling of various features provided by the driver, especially in cases where a particular feature appears to cause problems with your device. The availability of the various "settings" plattform attributes (`usb_charge`, `start_on_lid_open`, etc) will always be enabled if they appear to be supported, and cannot be disabled at this time.
 
 > **Note:** Please raise an issue if you find that you need to disable a certain feature in order to avoid a problem that it causes with your device!
 
