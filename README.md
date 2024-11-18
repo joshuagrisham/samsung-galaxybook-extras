@@ -66,6 +66,8 @@ In general the intention of these parameters is to allow for enabling or disabli
 
 ### Building and installing
 
+#### Compiling and installing manually
+
 Compile the module out-of-tree but against the currently loaded kernel's modules:
 
 ```sh
@@ -97,6 +99,34 @@ Uninstall the module:
 
 ```sh
 sudo rm /lib/modules/`uname -r`/updates/samsung-galaxybook.ko*
+```
+
+#### Compiling and installing automatically with dkms
+
+This module can be installed with dkms and provides autoinstallation for every new kernel.
+
+Add module to dkms tree:
+
+```sh
+sudo dkms add /path/to/module/directory/samsung-galaxybook-extras
+```
+
+Build module:
+
+```sh
+sudo dkms build samsung-galaxybook/extras
+```
+
+Install module:
+
+```sh
+sudo dkms install samsung-galaxybook/extras
+```
+
+Uninstall module:
+
+```sh
+sudo dkms uninstall samsung-galaxybook/extras
 ```
 
 #### How to avoid 'signature and/or required key missing'
