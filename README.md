@@ -29,7 +29,7 @@ The following features are currently implemented:
 - Fan speed monitoring via `fan_speed_rpm` sysfs attribute plus a new hwmon device
 - Performance mode (Performance, Optimized, Quiet, Silent) implemented as platform profiles
 
-The following features might be possible to implement but require  additional debugging and development:
+The following features might be possible to implement but require additional debugging and development:
 
 - "Dolby Atmos" mode for the speakers
 - "Outdoor Mode" for increasing screen brightness on models with `SAM0427`
@@ -52,7 +52,6 @@ The platform driver supports the following module parameters:
 - `allow_recording`: Enable control to allow or block access to camera and microphone (default on) (bool)
 - `fan_speed`: Enable fan speed (default on) (bool)
 - `i8042_filter`: Enable capturing keyboard hotkey events (default on) (bool)
-- `debug`: Enable debug messages (default off) (bool)
 
 In general, the intention of these parameters is to allow for the enabling or disabling of various features provided by the driver, especially in cases where a particular feature appears to cause problems with your device. The availability of the various "settings" plattform attributes (`usb_charge`, `start_on_lid_open`, etc) will always be enabled if they appear to be supported, and cannot be disabled at this time.
 
@@ -75,12 +74,12 @@ sudo make -C /lib/modules/`uname -r`/build M=$PWD modules_install
 sudo depmod
 ```
 
-> **Note:** if you wish to enable `debug` by default then you can add `samsung_galaxybook.debug=true` to your boot parameters.
+> **Note:** if you wish to enable debug messages then you can add `samsung_galaxybook.dyndbg=+p` or similar to your boot parameters.
 
 Load the module (including enabling debugging messages):
 
 ```sh
-sudo modprobe samsung-galaxybook debug=true
+sudo modprobe samsung-galaxybook dyndbg=+p
 ```
 
 Unload the module:
@@ -134,8 +133,24 @@ sudo rmmod samsung-galaxybook
 
 sudo cp samsung-galaxybook.ko /lib/modules/`uname -r`/updates/samsung-galaxybook.ko
 
-sudo modprobe samsung-galaxybook debug=true
+sudo modprobe samsung-galaxybook dyndbg=+p
 ```
+
+#### How to enable debug messages
+
+Much more detailed messages are available if you enable printing the debug messages. This can be done using dynamic debug provided that your current kernel's `CONFIG_DYNAMIC_DEBUG` is enabled. More information about how to use this feature is available in the Kernel documentation: [Dynamic debug](https://www.kernel.org/doc/html/latest/admin-guide/dynamic-debug-howto.html)
+
+Here are some examples:
+
+```sh
+# enable printing all messages from the module when loading it
+sudo modprobe samsung-galaxybook dyndbg=+p
+
+# enable printing all messages from the module after it has been loaded
+echo "module samsung_galaxybook +p" | sudo tee /sys/kernel/debug/dynamic_debug/control
+```
+
+You can also add the parameter `samsung_galaxyboo.dyndbg` with whatever desired value (e.g. `+p`) to your boot command line parameters or to a `modprobe.d` configuration file if you wish for it to be enabled automatically.
 
 #### Enable or disable features using parameters
 
@@ -143,7 +158,7 @@ The module parameters can be used to enable or disable most features. For exampl
 
 ```sh
 sudo rmmod samsung-galaxybook
-sudo modprobe samsung-galaxybook debug=false kbd_backlight=on battery_threshold=off performance_mode=off fan_speed=off i8042_filter=off acpi_hotkeys=off wmi_hotkeys=off
+sudo modprobe samsung-galaxybook dyndbg=+p kbd_backlight=on battery_threshold=off performance_mode=off allow_recording=off fan_speed=off i8042_filter=off
 ```
 
 Note that these can also be added to the boot parameters (e.g. `samsung_galaxybook.fan_speed=off`).
@@ -332,7 +347,7 @@ cat gb_test_fans_ssdt.aml | sudo tee /sys/kernel/config/acpi/table/gb_test_fans_
 
 # remove and reload the module (via insmod or modprobe)
 sudo rmmod samsung-galaxybook
-sudo insmod samsung-galaxybook.ko debug=true
+sudo insmod samsung-galaxybook.ko dyndbg=+p
 ```
 
 > **Note:** You will need to restart in order to remove these fake devices.
