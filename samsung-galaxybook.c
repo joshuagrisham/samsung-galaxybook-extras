@@ -237,9 +237,6 @@ static const struct key_entry galaxybook_acpi_keymap[] = {
 	{KE_END, 0},
 };
 
-#define REPORT_BUG "please report this to: https://github.com/joshuagrisham/samsung-galaxybook-extras/issues"
-/* TODO: Eventually replace this URL with platform-driver-x86@vger.kernel.org */
-
 /*
  * ACPI method handling
  */
@@ -720,18 +717,13 @@ static int charge_control_end_threshold_acpi_set(struct samsung_galaxybook *gala
 	if (value > 100)
 		return -EINVAL;
 
-	if (value == 100) {
-		pr_warn("setting battery charge_control_end_threshold to 100 " \
-				"will effectively just turn off charge control; value will be set to 0 (off)\n");
-	}
-
 	buf.safn = SAFN;
 	buf.sasb = SASB_POWER_MANAGEMENT;
 	buf.gunm = GUNM_POWER_MANAGEMENT;
 	buf.guds[0] = GUDS_BATTERY_CHARGE_CONTROL;
 	buf.guds[1] = GUDS_BATTERY_CHARGE_CONTROL_SET;
 
-	buf.guds[2] = (value == 100 ? 0 : value);
+	buf.guds[2] = (value == 100 ? 0 : value); /* if setting to 100, it should be set to 0 (off) */
 
 	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
 			"setting battery charge_control_end_threshold", &buf);
@@ -865,7 +857,8 @@ static int fan_speed_get_fst(struct galaxybook_fan *fan, unsigned int *speed)
 
 	*speed = response_obj->package.elements[2].integer.value;
 
-	pr_debug_prefixed("reporting fan_speed of %d\n", *speed);
+	pr_debug_prefixed("fan device %s (%s) reporting fan speed of %d\n",
+			dev_name(&fan->fan.dev), fan->description, *speed);
 
 out_free:
 	ACPI_FREE(response.pointer);
@@ -899,7 +892,8 @@ static int fan_speed_get_fans(struct galaxybook_fan *fan, unsigned int *speed)
 	speed_level = (int) response_obj->integer.value;
 	*speed = fan->fan_speeds[speed_level];
 
-	pr_debug_prefixed("reporting fan_speed of %d (level %d)\n", *speed, speed_level);
+	pr_debug_prefixed("fan device %s (%s) reporting fan speed of %d (level %d)\n",
+			dev_name(&fan->fan.dev), fan->description, *speed, speed_level);
 
 out_free:
 	ACPI_FREE(response.pointer);
@@ -1001,7 +995,8 @@ static int __init fan_speed_list_init(acpi_handle handle, struct galaxybook_fan 
 	pr_info("initialized fan speed reporting for device %s (%s) with the following levels:\n",
 			dev_name(&fan->fan.dev), fan->description);
 	for (i = 0; i < fan->fan_speeds_count; i++)
-		pr_info("  fan speed level %d = %d\n", i, fan->fan_speeds[i]);
+		pr_info("  %s (%s) fan speed level %d = %d\n",
+				dev_name(&fan->fan.dev), fan->description, i, fan->fan_speeds[i]);
 
 out_free:
 	ACPI_FREE(response.pointer);
@@ -1033,8 +1028,7 @@ static acpi_status galaxybook_add_fan(acpi_handle handle, u32 level, void *conte
 	}
 
 	if (galaxybook->fans_count >= MAX_FAN_COUNT) {
-		pr_err("maximum number of %d fans has already been reached; %s\n",
-				MAX_FAN_COUNT, REPORT_BUG);
+		pr_err("maximum number of %d fans has already been reached\n", MAX_FAN_COUNT);
 		return 0;
 	}
 
@@ -1065,13 +1059,13 @@ static acpi_status galaxybook_add_fan(acpi_handle handle, u32 level, void *conte
 		/* since FANS is a single field on the EC, it does not make sense to use more than once */
 		for (int i = 0; i < galaxybook->fans_count; i++) {
 			if (!galaxybook->fans[i].supports_fst) {
-				pr_err("more than one fan using FANS is not supported; %s\n", REPORT_BUG);
+				pr_err("more than one fan using FANS is not supported\n");
 				return 0;
 			}
 		}
 		if (ACPI_FAILURE(fan_speed_list_init(handle, fan))) {
-			pr_err("unable to initialize fan speeds for fan device %s (%s); %s\n",
-					dev_name(&fan->fan.dev), fan->description, REPORT_BUG);
+			pr_err("unable to initialize fan speeds for fan device %s (%s)\n",
+					dev_name(&fan->fan.dev), fan->description);
 			return 0;
 		}
 	} else {
@@ -1583,7 +1577,7 @@ static void galaxybook_input_notify(struct samsung_galaxybook *galaxybook, int e
 		return;
 	pr_debug_prefixed("input notification event: 0x%x\n", event);
 	if (!sparse_keymap_report_event(galaxybook->input, event, 1, true))
-		pr_warn("unknown input notification event: 0x%x; %s\n", event, REPORT_BUG);
+		pr_warn("unknown input notification event: 0x%x\n", event);
 }
 
 static int galaxybook_input_init(struct samsung_galaxybook *galaxybook)
@@ -1607,7 +1601,7 @@ static int galaxybook_input_init(struct samsung_galaxybook *galaxybook)
 	}
 	error = input_register_device(input);
 	if (error) {
-		pr_warn("Unable to register input device\n");
+		pr_err("Unable to register input device\n");
 		goto err_free_dev;
 	}
 
@@ -1646,13 +1640,14 @@ static int galaxybook_platform_attributes_init(struct samsung_galaxybook *galaxy
 
 	err = start_on_lid_open_acpi_get(galaxybook, &value);
 	if (err)
-		pr_warn("failed to get start_on_lid_open value; this feature will not be enabled\n");
+		pr_debug_prefixed("failed to get start_on_lid_open value; " \
+				"this feature will not be enabled\n");
 	else
 		galaxybook_attrs[i++] = &dev_attr_start_on_lid_open.attr;
 
 	err = usb_charge_acpi_get(galaxybook, &value);
 	if (err)
-		pr_warn("failed to get usb_charge value; this feature will not be enabled\n");
+		pr_debug_prefixed("failed to get usb_charge value; this feature will not be enabled\n");
 	else
 		galaxybook_attrs[i++] = &dev_attr_usb_charge.attr;
 
@@ -1660,14 +1655,14 @@ static int galaxybook_platform_attributes_init(struct samsung_galaxybook *galaxy
 		pr_debug_prefixed("initializing ACPI allow_recording feature\n");
 		err = galaxybook_enable_acpi_feature(galaxybook, SASB_ALLOW_RECORDING);
 		if (err) {
-			pr_warn("failed to initialize ACPI allow_recording feature\n");
+			pr_debug_prefixed("failed to initialize ACPI allow_recording feature\n");
 			allow_recording = false;
 			return 0;
 		}
 
 		err = allow_recording_acpi_get(galaxybook, &value);
 		if (err) {
-			pr_warn("failed to get allow_recording value; " \
+			pr_debug_prefixed("failed to get allow_recording value; " \
 					"this feature will not be enabled\n");
 			allow_recording = false;
 		}
@@ -1815,7 +1810,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("initializing performance mode and platform profile\n");
 		err = galaxybook_profile_init(galaxybook);
 		if (err) {
-			pr_warn("failed to initialize performance mode and platform profile\n");
+			pr_debug_prefixed("failed to initialize performance mode and platform profile\n");
 			performance_mode = false;
 		}
 	} else {
@@ -1826,7 +1821,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("initializing battery charge threshold control\n");
 		err = galaxybook_battery_threshold_init(galaxybook);
 		if (err) {
-			pr_warn("failed to initialize battery charge threshold control\n");
+			pr_debug_prefixed("failed to initialize battery charge threshold control\n");
 			battery_threshold = false;
 		}
 	} else {
@@ -1855,7 +1850,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("initializing kbd_backlight\n");
 		err = galaxybook_kbd_backlight_init(galaxybook);
 		if (err) {
-			pr_warn("failed to initialize kbd_backlight\n");
+			pr_debug_prefixed("failed to initialize kbd_backlight\n");
 			kbd_backlight = false;
 		}
 	} else {
@@ -1866,7 +1861,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("initializing fan speed\n");
 		err = galaxybook_fan_speed_init(galaxybook);
 		if (err) {
-			pr_warn("failed to initialize fan speed\n");
+			pr_debug_prefixed("failed to initialize fan speed\n");
 			fan_speed = false;
 		} else {
 #if IS_ENABLED(CONFIG_HWMON)
@@ -1897,7 +1892,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 
 		err = i8042_install_filter(galaxybook_i8042_filter);
 		if (err) {
-			pr_warn("failed to install i8402 key filter\n");
+			pr_err("failed to install i8402 key filter\n");
 			cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
 			cancel_work_sync(&galaxybook->allow_recording_hotkey_work);
 			i8042_filter = false;
@@ -1918,7 +1913,7 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("initializing input device\n");
 		err = galaxybook_input_init(galaxybook);
 		if (err) {
-			pr_warn("failed to initialize input device\n");
+			pr_err("failed to initialize input device\n");
 			cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
 			galaxybook_input_exit(galaxybook);
 		}
