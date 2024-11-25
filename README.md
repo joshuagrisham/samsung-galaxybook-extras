@@ -173,6 +173,42 @@ One general observation that I have made is that there are in fact quite a lot o
 
 It would be great if we could actually get some help from Samsung regarding this!
 
+### Platform Device sysfs attributes path
+
+Based on a discussion with the Linux Platform x86 maintainers (see the [mailing list thread here](https://lore.kernel.org/platform-driver-x86/CAMF+KeaSarRT3weYhiCFO=Th5ZWMf=nvi53A+ggKYq2wBYAJpw@mail.gmail.com/T/#ma17bd2db196e1b6872e14963b84d1117bdb0f67d) for more background on this), this platform driver will use the existing platform device that is already created on our systems and just add additional attributes and features to them.
+
+As the existing auto-created device is tied to the ACPI Device, and there are multiple different device IDs supported, the path will be different dependning on which model you are using. Example:
+
+```sh
+# find which device ID you have
+ls /sys/bus/platform/devices/ | grep SAM04
+
+# see SAM0429 attributes
+ls /sys/bus/platform/devices/SAM0429\:00
+
+# see attributes no matter which model you have
+ls /sys/bus/platform/devices/SAM04*
+```
+
+It should be possible to use wildcard expansion in order to read and write device attributes. It might be even safer to access only devices that are bound to the driver, like this:
+
+```sh
+# see attributes for device bound to the driver, no matter which model you have
+ls /sys/bus/platform/drivers/samsung-galaxybook/SAM*
+```
+
+It is also possible to use a udev rule to create a fixed symlink to your device under `/dev`. There is an example rule file included in this repository (`99-samsung-galaxybook.rules`) which will create a symlink at `/dev/samsung-galaxybook` with a few variants of how this can be accomplished. This rule file can be installed as follows:
+
+```sh
+sudo cp 99-samsung-galaxybook.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+In theory the rule should now be triggered if you `rmmod` and `modprobe`/`insmod` the driver again, but you might need to reboot in order to fully enable the rules to be triggered correctly.
+
+From there, you can access the platform device and all of its attributes via the fixed path `/dev/samsung-galaxybook` instead of going through a dynamic path under `/sys/bus/platform`.
+
 ### Keyboard Hotkeys
 
 Samsung have decided to use the main keyboard device to also send most of the hotkey events. If the driver wishes to capture and act on these hotkeys, then we will have to do something like using a i8402 filter to "catch" the key events.
@@ -242,32 +278,44 @@ There is also an input event sent to the standard keyboard and ACPI device which
 
 ### Start on lid open
 
-To turn on or off the "Start on lid open" setting (the laptop will power on automatically when opening the lid), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/start_on_lid_open` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "Start on lid open" setting (the laptop will power on automatically when opening the lid), there is a new device attribute created named `start_on_lid_open` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/devices/platform/samsung-galaxybook/start_on_lid_open
+cat /sys/bus/platform/drivers/samsung-galaxybook/SAM*/start_on_lid_open
+
+# read current value if you are using the udev rule
+cat /dev/samsung-galaxybook/start_on_lid_open
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/devices/platform/samsung-galaxybook/start_on_lid_open
+echo true | sudo tee /sys/bus/platform/drivers/samsung-galaxybook/SAM*/start_on_lid_open
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/start_on_lid_open
+echo 0 | sudo tee /sys/bus/platform/drivers/samsung-galaxybook/SAM*/start_on_lid_open
+
+# turn on if you are using the udev rule
+echo on | sudo tee /dev/samsung-galaxybook/start_on_lid_open
 ```
 
 ### USB Charge mode
 
-To turn on or off the "USB Charge" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/usb_charge` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "USB Charge" mode (allows USB ports to provide power even when the laptop is turned off), there is a new device attribute created named `usb_charge` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/devices/platform/samsung-galaxybook/usb_charge
+cat /sys/bus/platform/drivers/samsung-galaxybook/SAM*/usb_charge
+
+# read current value if you are using the udev rule
+cat /dev/samsung-galaxybook/usb_charge
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charge
+echo true | sudo tee /sys/bus/platform/drivers/samsung-galaxybook/SAM*/usb_charge
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/usb_charge
+echo 0 | sudo tee /sys/bus/platform/drivers/samsung-galaxybook/SAM*/usb_charge
+
+# turn on if you are using the udev rule
+echo on | sudo tee /dev/samsung-galaxybook/usb_charge
 ```
 
 My own observations on how this feature appears to work (which has nothing to do with this driver itself, actually):
@@ -278,19 +326,25 @@ My own observations on how this feature appears to work (which has nothing to do
 
 ### Allow recording
 
-To turn on or off the "Allow recording" setting (allows or blocks usage of the built-in camera and microphone), there is a new device attribute created at `/sys/devices/platform/samsung-galaxybook/allow_recording` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
+To turn on or off the "Allow recording" setting (allows or blocks usage of the built-in camera and microphone), there is a new device attribute created named `allow_recording` which can be read from or written to. A value of 0 means "off" while a value of 1 means "on".
 
 The Samsung user manual calls this setting "Blocking Recording mode", but as the value needed is 1 for "not blocked" and 0 for "blocked" (i.e. the value of 1 vs 0 feels "backwards" compared to the name), it felt like something of a misnomer to call it that for this driver. It seems to make more sense that 1 means "allowed" and 0 means "not allowed"; this way, it is hopefully more obvious to the user of this driver what will actually happen when this value is changed.
 
 ```sh
 # read current value (0 for disabled, 1 for enabled)
-cat /sys/devices/platform/samsung-galaxybook/allow_recording
+cat /sys/bus/platform/drivers/samsung-galaxybook/SAM*/allow_recording
+
+# read current value if you are using the udev rule
+cat /dev/samsung-galaxybook/allow_recording
 
 # turn on (supports values such as: 1, on, true, yes, etc)
-echo true | sudo tee /sys/devices/platform/samsung-galaxybook/allow_recording
+echo true | sudo tee /sys/bus/platform/drivers/samsung-galaxybook/SAM*/allow_recording
 
 # turn off (supports values such as: 0, off, false, no, etc)
-echo 0 | sudo tee /sys/devices/platform/samsung-galaxybook/allow_recording
+echo 0 | sudo tee /sys/bus/platform/drivers/samsung-galaxybook/SAM*/allow_recording
+
+# turn on if you are using the udev rule
+echo on | sudo tee /dev/samsung-galaxybook/allow_recording
 ```
 
 ### Fan speed
