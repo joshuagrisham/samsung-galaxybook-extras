@@ -443,6 +443,7 @@ static enum led_brightness kbd_backlight_show(struct led_classdev *led)
 static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 {
 	enum led_brightness brightness;
+	struct led_init_data init_data = {};
 	int err;
 
 	err = galaxybook_enable_acpi_feature(galaxybook, SASB_KBD_BACKLIGHT);
@@ -454,18 +455,22 @@ static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 	if (err)
 		return err;
 
+	init_data.devicename = SAMSUNG_GALAXYBOOK_CLASS;
+	init_data.default_label = ":kbd_backlight";
+	init_data.devname_mandatory = true;
+
 	galaxybook->kbd_backlight = (struct led_classdev) {
 		.brightness_get = kbd_backlight_show,
 		.brightness_set_blocking = kbd_backlight_store,
 		.flags = LED_BRIGHT_HW_CHANGED,
-		.name = SAMSUNG_GALAXYBOOK_CLASS "::kbd_backlight",
 		.max_brightness = KBD_BACKLIGHT_MAX_BRIGHTNESS,
 	};
 
-	pr_info("registering LED class %s\n",
-			galaxybook->kbd_backlight.name);
+	pr_info("registering LED class using default name of %s:%s\n",
+			init_data.devicename, init_data.default_label);
 
-	return led_classdev_register(&galaxybook->platform->dev, &galaxybook->kbd_backlight);
+	return led_classdev_register_ext(&galaxybook->platform->dev, &galaxybook->kbd_backlight,
+			&init_data);
 }
 
 static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
