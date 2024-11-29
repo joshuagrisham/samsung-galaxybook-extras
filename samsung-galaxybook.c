@@ -254,22 +254,42 @@ static const struct key_entry galaxybook_acpi_keymap[] = {
 
 static char * get_acpi_device_description(struct acpi_device *acpi_dev)
 {
-	/* first try to get value of _STR but convert it to utf8  */
-	if (acpi_dev->pnp.str_obj != NULL && acpi_dev->pnp.str_obj->buffer.length > 0) {
-		char *buf = kzalloc(sizeof(*buf) * acpi_dev->pnp.str_obj->buffer.length, GFP_KERNEL);
-		utf16s_to_utf8s(
-			(wchar_t *)acpi_dev->pnp.str_obj->buffer.pointer,
-			acpi_dev->pnp.str_obj->buffer.length,
+	struct acpi_buffer str_buf = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *str_obj;
+	struct acpi_buffer name_buf = { ACPI_ALLOCATE_BUFFER, NULL };
+	acpi_status status;
+	int result;
+
+	/* first try to get value of _STR (and also convert it to utf8)  */
+	if (!acpi_has_method(acpi_dev->handle, "_STR"))
+		goto use_name;
+	status = acpi_evaluate_object_typed(acpi_dev->handle, "_STR", NULL, &str_buf, ACPI_TYPE_BUFFER);
+	if (ACPI_SUCCESS(status) && str_buf.length > 0) {
+		str_obj = str_buf.pointer;
+		char *buf = kzalloc(sizeof(*buf) * str_obj->buffer.length, GFP_KERNEL);
+		result = utf16s_to_utf8s(
+			(wchar_t *)str_obj->buffer.pointer,
+			str_obj->buffer.length,
 			UTF16_LITTLE_ENDIAN, buf,
 			PAGE_SIZE - 1);
-		return buf;
+		kfree(str_obj);
+		if (result > 0)
+			return buf;
+		else
+			kfree(buf);
 	}
 
+	if (str_buf.pointer)
+		kfree(str_buf.pointer);
+
+use_name:
 	/* if _STR is missing then just use the device name */
-	struct acpi_buffer string = { ACPI_ALLOCATE_BUFFER, NULL };
-	if (ACPI_SUCCESS(acpi_get_name(acpi_dev->handle, ACPI_SINGLE_NAME, &string)) &&
-			string.length > 0)
-		return string.pointer;
+	status = acpi_get_name(acpi_dev->handle, ACPI_SINGLE_NAME, &name_buf);
+	if (ACPI_SUCCESS(status) &&	name_buf.length > 0)
+		return name_buf.pointer;
+
+	if (name_buf.pointer)
+		kfree(name_buf.pointer);
 
 	return NULL;
 }
