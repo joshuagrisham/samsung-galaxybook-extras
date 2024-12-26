@@ -210,6 +210,8 @@ static const guid_t performance_mode_guid_value =
 #define DEFAULT_PLATFORM_PROFILE PLATFORM_PROFILE_BALANCED
 
 #define ACPI_METHOD_ENABLE           "SDLS"
+#define ACPI_METHOD_ENABLE_ON        1
+#define ACPI_METHOD_ENABLE_OFF       0
 #define ACPI_METHOD_SETTINGS         "CSFI"
 #define ACPI_METHOD_PERFORMANCE_MODE "CSXI"
 
@@ -252,22 +254,15 @@ static const struct key_entry galaxybook_acpi_keymap[] = {
 
 static char * get_acpi_device_description(struct acpi_device *acpi_dev)
 {
-	/* first try to get value of _STR but convert it to utf8  */
-	if (acpi_dev->pnp.str_obj != NULL && acpi_dev->pnp.str_obj->buffer.length > 0) {
-		char *buf = kzalloc(sizeof(*buf) * acpi_dev->pnp.str_obj->buffer.length, GFP_KERNEL);
-		utf16s_to_utf8s(
-			(wchar_t *)acpi_dev->pnp.str_obj->buffer.pointer,
-			acpi_dev->pnp.str_obj->buffer.length,
-			UTF16_LITTLE_ENDIAN, buf,
-			PAGE_SIZE - 1);
-		return buf;
-	}
+	struct acpi_buffer name_buf = { ACPI_ALLOCATE_BUFFER, NULL };
+	acpi_status status;
 
-	/* if _STR is missing then just use the device name */
-	struct acpi_buffer string = { ACPI_ALLOCATE_BUFFER, NULL };
-	if (ACPI_SUCCESS(acpi_get_name(acpi_dev->handle, ACPI_SINGLE_NAME, &string)) &&
-			string.length > 0)
-		return string.pointer;
+	status = acpi_get_name(acpi_dev->handle, ACPI_SINGLE_NAME, &name_buf);
+	if (ACPI_SUCCESS(status) &&	name_buf.length > 0)
+		return name_buf.pointer;
+
+	if (name_buf.pointer)
+		kfree(name_buf.pointer);
 
 	return NULL;
 }
@@ -441,6 +436,7 @@ static enum led_brightness kbd_backlight_show(struct led_classdev *led)
 static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 {
 	enum led_brightness brightness;
+	struct led_init_data init_data = {};
 	int err;
 
 	err = galaxybook_enable_acpi_feature(galaxybook, SASB_KBD_BACKLIGHT);
@@ -452,18 +448,22 @@ static int galaxybook_kbd_backlight_init(struct samsung_galaxybook *galaxybook)
 	if (err)
 		return err;
 
+	init_data.devicename = SAMSUNG_GALAXYBOOK_CLASS;
+	init_data.default_label = ":kbd_backlight";
+	init_data.devname_mandatory = true;
+
 	galaxybook->kbd_backlight = (struct led_classdev) {
 		.brightness_get = kbd_backlight_show,
 		.brightness_set_blocking = kbd_backlight_store,
 		.flags = LED_BRIGHT_HW_CHANGED,
-		.name = SAMSUNG_GALAXYBOOK_CLASS "::kbd_backlight",
 		.max_brightness = KBD_BACKLIGHT_MAX_BRIGHTNESS,
 	};
 
-	pr_info("registering LED class %s\n",
-			galaxybook->kbd_backlight.name);
+	pr_info("registering LED class using default name of %s:%s\n",
+			init_data.devicename, init_data.default_label);
 
-	return led_classdev_register(&galaxybook->platform->dev, &galaxybook->kbd_backlight);
+	return led_classdev_register_ext(&galaxybook->platform->dev, &galaxybook->kbd_backlight,
+			&init_data);
 }
 
 static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
@@ -472,7 +472,7 @@ static void galaxybook_kbd_backlight_exit(struct samsung_galaxybook *galaxybook)
 }
 
 /*
- * Platform Attributes (configuration properties which can be controlled via userspace)
+ * Platform device attributes (configuration properties which can be controlled via userspace)
  */
 
 /* Start on lid open (device should power on when lid is opened) */
@@ -1514,8 +1514,6 @@ static void galaxybook_kbd_backlight_hotkey_work(struct work_struct *work)
 
 	led_classdev_notify_brightness_hw_changed(&galaxybook->kbd_backlight,
 			galaxybook->kbd_backlight.brightness);
-
-	return;
 }
 
 static void galaxybook_allow_recording_hotkey_work(struct work_struct *work)
@@ -1526,8 +1524,6 @@ static void galaxybook_allow_recording_hotkey_work(struct work_struct *work)
 
 	allow_recording_acpi_get(galaxybook, &value);
 	allow_recording_acpi_set(galaxybook, !value);
-
-	return;
 }
 
 static bool galaxybook_i8042_filter(unsigned char data, unsigned char str,
@@ -1589,7 +1585,7 @@ static int galaxybook_input_init(struct samsung_galaxybook *galaxybook)
 	if (!input)
 		return -ENOMEM;
 
-	input->name = "Samsung Galaxy Book extra buttons";
+	input->name = "Samsung Galaxy Book Extra Buttons";
 	input->phys = SAMSUNG_GALAXYBOOK_CLASS "/input0";
 	input->id.bustype = BUS_HOST;
 	input->dev.parent = &galaxybook->platform->dev;
@@ -1628,9 +1624,11 @@ static void galaxybook_input_exit(struct samsung_galaxybook *galaxybook)
 #define MAX_NUM_DEVICE_ATTRIBUTES 3
 
 static struct attribute *galaxybook_attrs[MAX_NUM_DEVICE_ATTRIBUTES+1] = { NULL };
-ATTRIBUTE_GROUPS(galaxybook);
+static const struct attribute_group galaxybook_attrs_group = {
+	.attrs = galaxybook_attrs,
+};
 
-static int galaxybook_platform_attributes_init(struct samsung_galaxybook *galaxybook)
+static int galaxybook_device_attrs_init(struct samsung_galaxybook *galaxybook)
 {
 	bool value;
 	int err;
@@ -1665,65 +1663,31 @@ static int galaxybook_platform_attributes_init(struct samsung_galaxybook *galaxy
 			pr_debug_prefixed("failed to get allow_recording value; " \
 					"this feature will not be enabled\n");
 			allow_recording = false;
-		}
-		else {
+		} else {
 			galaxybook_attrs[i++] = &dev_attr_allow_recording.attr;
 		}
 	}
 
-	return 0;
+	return device_add_group(&galaxybook->platform->dev, &galaxybook_attrs_group);
 };
 
-/*
- * Platform device
- */
-
-static struct platform_driver galaxybook_platform_driver = {
-	.driver = {
-		.name = SAMSUNG_GALAXYBOOK_CLASS,
-		.acpi_match_table = galaxybook_device_ids,
-		.dev_groups = galaxybook_groups,
-	},
-};
-
-static int galaxybook_platform_init(struct samsung_galaxybook *galaxybook)
+static void galaxybook_device_attrs_exit(struct samsung_galaxybook *galaxybook)
 {
-	int err;
-
-	galaxybook->platform = platform_device_alloc(SAMSUNG_GALAXYBOOK_CLASS, PLATFORM_DEVID_NONE);
-	if (!galaxybook->platform)
-		return -ENOMEM;
-
-	platform_set_drvdata(galaxybook->platform, galaxybook);
-
-	err = platform_device_add(galaxybook->platform);
-	if (err)
-		goto err_device_put;
-
-	return 0;
-
-err_device_put:
-	platform_device_put(galaxybook->platform);
-	return err;
-}
-
-static void galaxybook_platform_exit(struct samsung_galaxybook *galaxybook)
-{
-	platform_device_unregister(galaxybook->platform);
+	device_remove_group(&galaxybook->platform->dev, &galaxybook_attrs_group);
 }
 
 /*
- * ACPI device
+ * ACPI device setup
  */
 
-static void galaxybook_acpi_notify(struct acpi_device *device, u32 event)
+static void galaxybook_acpi_notify(acpi_handle handle, u32 event, void *data)
 {
-	struct samsung_galaxybook *galaxybook = acpi_driver_data(device);
+	struct samsung_galaxybook *galaxybook = data;
 
 	if (event == ACPI_NOTIFY_HOTKEY_PERFORMANCE_MODE) {
 		pr_debug_prefixed("hotkey: performance_mode keydown\n");
 		if (performance_mode)
-			schedule_work(&galaxybook_ptr->performance_mode_hotkey_work);
+			schedule_work(&galaxybook->performance_mode_hotkey_work);
 	}
 
 	galaxybook_input_notify(galaxybook, event);
@@ -1743,37 +1707,36 @@ static int galaxybook_enable_acpi_notify(struct samsung_galaxybook *galaxybook)
 	buf.gunm = GUNM_ACPI_NOTIFY_ENABLE;
 	buf.guds[0] = GUDS_ACPI_NOTIFY_ENABLE;
 
-	err = galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
+	return galaxybook_acpi_method(galaxybook, ACPI_METHOD_SETTINGS, &buf, SAWB_LEN_SETTINGS,
 			"activate ACPI notifications", &buf);
-	if (err)
-		return err;
-
-	return 0;
 }
 
 static int galaxybook_acpi_init(struct samsung_galaxybook *galaxybook)
 {
-	int err;
-
-	err = acpi_execute_simple_method(galaxybook->acpi->handle, ACPI_METHOD_ENABLE, 1);
-	if (err)
-		return err;
-
-	return 0;
+	return acpi_execute_simple_method(galaxybook->acpi->handle,
+			ACPI_METHOD_ENABLE, ACPI_METHOD_ENABLE_ON);
 }
 
 static void galaxybook_acpi_exit(struct samsung_galaxybook *galaxybook)
 {
-	acpi_execute_simple_method(galaxybook->acpi->handle, ACPI_METHOD_ENABLE, 0);
-	return;
+	acpi_execute_simple_method(galaxybook->acpi->handle,
+			ACPI_METHOD_ENABLE, ACPI_METHOD_ENABLE_OFF);
 }
 
-static int galaxybook_acpi_add(struct acpi_device *device)
+/*
+ * Platform driver
+ */
+
+static int galaxybook_probe(struct platform_device *pdev)
 {
+	struct acpi_device *adev = ACPI_COMPANION(&pdev->dev);
 	struct samsung_galaxybook *galaxybook;
+	acpi_status status;
 	int err;
 
 	dmi_check_system(galaxybook_dmi_ids);
+
+	pr_info("found matched device %s; loading driver\n", dev_name(&adev->dev));
 
 	galaxybook = kzalloc(sizeof(struct samsung_galaxybook), GFP_KERNEL);
 	if (!galaxybook)
@@ -1781,14 +1744,10 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 	/* set static pointer here so it can be used in various methods for hotkeys, hwmon, etc */
 	galaxybook_ptr = galaxybook;
 
-	strcpy(acpi_device_name(device), "Galaxybook Extras Controller");
-	strcpy(acpi_device_class(device), SAMSUNG_GALAXYBOOK_CLASS);
-	device->driver_data = galaxybook;
-	galaxybook->acpi = device;
+	galaxybook->platform = pdev;
+	galaxybook->acpi = adev;
 
-	/*
-	 * First, init things that the platform device depends on
-	 */
+	dev_set_drvdata(&galaxybook->platform->dev, galaxybook);
 
 	pr_debug_prefixed("initializing ACPI device\n");
 	err = galaxybook_acpi_init(galaxybook);
@@ -1828,23 +1787,10 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("battery_threshold is disabled\n");
 	}
 
-	/*
-	 * Init and create the platform device
-	 */
-
-	pr_debug_prefixed("initializing platform device attributes\n");
-	galaxybook_platform_attributes_init(galaxybook);
-
-	pr_debug_prefixed("initializing platform device\n");
-	err = galaxybook_platform_init(galaxybook);
-	if (err) {
-		pr_err("failed to initialize the platform device; driver will be unloaded\n");
-		goto err_acpi_exit;
-	}
-
-	/*
-	 * Finally, init everything else, including things that depend on the platform device
-	 */
+	pr_debug_prefixed("adding platform device attributes\n");
+	err = galaxybook_device_attrs_init(galaxybook);
+	if (err)
+		pr_err("failed to add platform device attributes\n");
 
 	if (kbd_backlight) {
 		pr_debug_prefixed("initializing kbd_backlight\n");
@@ -1901,36 +1847,47 @@ static int galaxybook_acpi_add(struct acpi_device *device)
 		pr_debug_prefixed("i8042_filter is disabled\n");
 	}
 
-	pr_debug_prefixed("enabling ACPI notifications\n");
-	err = galaxybook_enable_acpi_notify(galaxybook);
-	if (err) {
-		pr_warn("failed to enable ACPI notifications; some hotkeys will not be supported\n");
-	} else {
-		/* initialize ACPI hotkey work queues */
-		INIT_WORK(&galaxybook->performance_mode_hotkey_work,
-				galaxybook_performance_mode_hotkey_work);
-
-		pr_debug_prefixed("initializing input device\n");
-		err = galaxybook_input_init(galaxybook);
+	pr_debug_prefixed("installing ACPI notify handler\n");
+	status = acpi_install_notify_handler(galaxybook->acpi->handle, ACPI_ALL_NOTIFY,
+			galaxybook_acpi_notify, galaxybook);
+	if (ACPI_SUCCESS(status)) {
+		pr_debug_prefixed("enabling ACPI notifications\n");
+		err = galaxybook_enable_acpi_notify(galaxybook);
 		if (err) {
-			pr_err("failed to initialize input device\n");
-			cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
-			galaxybook_input_exit(galaxybook);
+			pr_warn("failed to enable ACPI notifications; some hotkeys will not be supported\n");
+		} else {
+			/* initialize ACPI hotkey work queues */
+			INIT_WORK(&galaxybook->performance_mode_hotkey_work,
+					galaxybook_performance_mode_hotkey_work);
+
+			pr_debug_prefixed("initializing input device\n");
+			err = galaxybook_input_init(galaxybook);
+			if (err) {
+				pr_err("failed to initialize input device\n");
+				cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
+				galaxybook_input_exit(galaxybook);
+			}
 		}
+	} else {
+		pr_debug_prefixed("failed to install ACPI notify handler\n");
 	}
+
+	pr_info("driver successfully loaded\n");
 
 	return 0;
 
-err_acpi_exit:
-	galaxybook_acpi_exit(galaxybook);
 err_free:
 	kfree(galaxybook);
 	return err;
 }
 
-static void galaxybook_acpi_remove(struct acpi_device *device)
+static void galaxybook_remove(struct platform_device *pdev)
 {
-	struct samsung_galaxybook *galaxybook = acpi_driver_data(device);
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(&pdev->dev);
+
+	pr_info("removing driver\n");
+
+	galaxybook_device_attrs_exit(galaxybook);
 
 	galaxybook_input_exit(galaxybook);
 	cancel_work_sync(&galaxybook->performance_mode_hotkey_work);
@@ -1940,6 +1897,9 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 		cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
 		cancel_work_sync(&galaxybook->allow_recording_hotkey_work);
 	}
+
+	acpi_remove_notify_handler(galaxybook->acpi->handle, ACPI_ALL_NOTIFY,
+			galaxybook_acpi_notify);
 
 	if (fan_speed) {
 		galaxybook_fan_speed_exit(galaxybook);
@@ -1957,60 +1917,33 @@ static void galaxybook_acpi_remove(struct acpi_device *device)
 	if (performance_mode)
 		galaxybook_profile_exit(galaxybook);
 
-	galaxybook_platform_exit(galaxybook);
-
 	galaxybook_acpi_exit(galaxybook);
 
 	if (galaxybook_ptr)
 		galaxybook_ptr = NULL;
 
 	kfree(galaxybook);
+
+	pr_info("driver successfully removed\n");
 }
 
-static struct acpi_driver galaxybook_acpi_driver = {
-	.name = SAMSUNG_GALAXYBOOK_NAME,
-	.class = SAMSUNG_GALAXYBOOK_CLASS,
-	.ids = galaxybook_device_ids,
-	.flags = ACPI_DRIVER_ALL_NOTIFY_EVENTS,
-	.ops = {
-		.add = galaxybook_acpi_add,
-		.remove = galaxybook_acpi_remove,
-		.notify = galaxybook_acpi_notify,
-		},
+static struct platform_driver galaxybook_platform_driver = {
+	.driver = {
+		.name = SAMSUNG_GALAXYBOOK_CLASS,
+		.acpi_match_table = galaxybook_device_ids,
+	},
+	.probe = galaxybook_probe,
+	.remove_new = galaxybook_remove,
 };
 
 static int __init samsung_galaxybook_init(void)
 {
-	int ret;
-
-	pr_info("loading driver\n");
-
-	ret = platform_driver_register(&galaxybook_platform_driver);
-	if (ret < 0)
-		goto err_unregister_platform;
-
-	ret = acpi_bus_register_driver(&galaxybook_acpi_driver);
-	if (ret < 0)
-		goto err_unregister_acpi;
-
-	pr_info("driver successfully loaded\n");
-
-	return 0;
-
-err_unregister_acpi:
-	acpi_bus_unregister_driver(&galaxybook_acpi_driver);
-err_unregister_platform:
-	platform_driver_unregister(&galaxybook_platform_driver);
-
-	return ret;
+	return platform_driver_register(&galaxybook_platform_driver);
 }
 
 static void __exit samsung_galaxybook_exit(void)
 {
-	pr_info("removing driver\n");
-	acpi_bus_unregister_driver(&galaxybook_acpi_driver);
 	platform_driver_unregister(&galaxybook_platform_driver);
-	pr_info("driver successfully removed\n");
 }
 
 module_init(samsung_galaxybook_init);
