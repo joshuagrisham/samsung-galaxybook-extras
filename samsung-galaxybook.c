@@ -1527,7 +1527,7 @@ static void galaxybook_allow_recording_hotkey_work(struct work_struct *work)
 }
 
 static bool galaxybook_i8042_filter(unsigned char data, unsigned char str,
-				    				struct serio *port)
+				    				struct serio *port, void *context)
 {
 	static bool extended;
 
@@ -1543,7 +1543,7 @@ static bool galaxybook_i8042_filter(unsigned char data, unsigned char str,
 		switch (data) {
 		case GB_KEY_KBD_BACKLIGHT_KEYDOWN:
 			pr_debug_prefixed("hotkey: kbd_backlight keydown\n");
-			break;
+			break;:
 		case GB_KEY_KBD_BACKLIGHT_KEYUP:
 			pr_debug_prefixed("hotkey: kbd_backlight keyup\n");
 			if (kbd_backlight)
@@ -1836,7 +1836,7 @@ static int galaxybook_probe(struct platform_device *pdev)
 			INIT_WORK(&galaxybook->allow_recording_hotkey_work,
 					galaxybook_allow_recording_hotkey_work);
 
-		err = i8042_install_filter(galaxybook_i8042_filter);
+		err = i8042_install_filter(galaxybook_i8042_filter, NULL);
 		if (err) {
 			pr_err("failed to install i8402 key filter\n");
 			cancel_work_sync(&galaxybook->kbd_backlight_hotkey_work);
