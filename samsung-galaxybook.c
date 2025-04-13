@@ -1933,7 +1933,12 @@ static struct platform_driver galaxybook_platform_driver = {
 		.acpi_match_table = galaxybook_device_ids,
 	},
 	.probe = galaxybook_probe,
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+  .remove = galaxybook_remove,
+#else
 	.remove_new = galaxybook_remove,
+#endif
 };
 
 static int __init samsung_galaxybook_init(void)
