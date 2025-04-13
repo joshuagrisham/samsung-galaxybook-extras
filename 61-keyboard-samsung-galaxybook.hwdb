@@ -16,4 +16,4 @@ evdev:atkbd:dmi:bvn*:bvr*:bd*:svn[sS][aA][mM][sS][uU][nN][gG]*:sku*SCAI*:*
  KEYBOARD_KEY_9f=unknown                                # Fn+F10 Camera and microphone toggle - handled by samsung-galaxybook
  KEYBOARD_KEY_a8=!unknown                               # Fn+F12 Fn lock On - handled by hardware
  KEYBOARD_KEY_a9=!unknown                               # Fn+F12 Fn lock Off - handled by hardware
- KEYBOARD_KEY_8f=!battery                               # Notification that battery has met charge control end threshold
+ KEYBOARD_KEY_8f=!unknown                               # Notification that battery has met charge control end threshold
