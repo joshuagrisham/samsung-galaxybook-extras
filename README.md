@@ -1,8 +1,8 @@
-# Samsung Galaxy Book Extras ⚠️(WIP)⚠️
+# Samsung Galaxy Book Extras ⚠️(WIP Pre Kernel 6.14)⚠️
+
+> ⚠️ **Note:** this version of the driver was a prototype but should still work for recent Kernel versions up to 6.13.x. Users with kernel versions later than 6.14.0 are **strongly** encouraged to use the mainline driver instead!
 
 Samsung Galaxy Book series extras Linux platform driver.
-
-Current status: ⚠️ **WIP but nearing readiness for mainline** ⚠️ (use at your own risk!)
 
 The intent is to somewhat replicate in Linux what Samsung has done in Windows with what I think the following components are doing:
 
